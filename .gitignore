@@ -169,3 +169,13 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Ignore the output/ folder
+output/
+scripts/
+
+# VS Code settings
+.vscode/launch.json
+
+# Testing scripts
+linktoscripts
