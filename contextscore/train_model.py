@@ -46,6 +46,7 @@ Example:
 
 import os
 import sys
+import subprocess
 import logging
 import numpy as np
 import joblib
@@ -57,7 +58,6 @@ from extract_features import extract_features
 
 # Set up the logger.
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
 
 def train(tp_files, fp_files):
     """Train the binary classification model."""
@@ -102,8 +102,6 @@ def train(tp_files, fp_files):
     if fp_data.empty:
         logging.error('False positive data is empty.')
         sys.exit(1)
-
-    
 
     # Check if any features are missing.
     if tp_data.isnull().values.any():
@@ -168,46 +166,151 @@ def train(tp_files, fp_files):
     # Return the model.
     return model
 
+def bed_to_annovar_input(bed_file):
+    """Convert the BED file to ANNOVAR input format."""
+    output_file = bed_file.replace('.bed', '.avinput')
+    logging.info('Converting the BED file to ANNOVAR input format.')
+
+    # Read the BED file using pandas (first line is the header with the column names).
+    df = pd.read_csv(bed_file, sep='\t', header=None, comment='#', names=["CHROM", "POS", "END", "SVTYPE", "SVLEN"], skiprows=1)
+    logging.info('Number of rows in the BED file: %d', df.shape[0])
+    logging.info('First 5 rows of the BED file:\n%s', df.head())
+
+    # The ANNOVAR input format requires the following columns:
+    # 1. Chromosome
+    # 2. Start position
+    # 3. End position
+    # 4. Reference allele
+    # 5. Alternate allele
+    # We will use the first three columns from the BED file and add two dummy
+    # columns for the reference and alternate alleles (0, and -) since gnomAD does not
+    # provide the sequence information for the SVs.
+
+    # Create a new dataframe with the required columns.
+    annovar_df = pd.DataFrame()
+    annovar_df['chrom'] = df['CHROM']
+    annovar_df['start'] = df['POS']
+    annovar_df['end'] = df['END']
+    annovar_df['ref'] = '0'
+    annovar_df['alt'] = '-'
+
+    # Save the tab-delimited dataframe to a file.
+    logging.info('Saving the ANNOVAR input file to %s', output_file)
+    annovar_df.to_csv(output_file, sep='\t', index=False, header=False)
+    logging.info('Number of rows in the ANNOVAR input file: %d', annovar_df.shape[0])
+    logging.info('First 5 rows of the ANNOVAR input file:\n%s', annovar_df.head())
+    logging.info('Saved the ANNOVAR input file to %s', output_file)
+
+    return output_file
+
+# def annotate_with_annovar(annovar_input, output_prefix, annovar_path, db_path):
+#     cmd = [
+#         f"{annovar_path}/table_annovar.pl",
+#         annovar_input,
+#         db_path,
+#         "--buildver hg19",
+#         "--out", output_prefix,
+#         "--remove",
+#         "--protocol refGene,cytoBand,dbnsfp35a",
+#         "--operation g,r,f",
+#         "--nastring ."
+#     ]
+#     subprocess.run(" ".join(cmd), shell=True, check=True)
+
+def download_annovar_db(annovar_path, db_path, db_name, buildver):
+    """Download the ANNOVAR database if it does not exist."""
+    logging.info('Downloading the database' + db_name)
+    cmd = [
+        f"{annovar_path}/annotate_variation.pl",
+        "-buildver", buildver,
+        "-downdb", db_name,
+        db_path
+    ]
+    
+    # Run the command to download the database.
+    logging.info('Running the command to download the database: %s', " ".join(cmd))
+    try:
+        subprocess.run(" ".join(cmd), shell=True, check=True)
+    except subprocess.CalledProcessError as e:
+        logging.error('Error downloading the database: %s', e)
+        logging.error('Please check the ANNOVAR path and database path.')
+        sys.exit(1)
+    logging.info('Downloaded the database %s successfully.', db_name)
+
+def annotate_segdup(annovar_input, annovar_path, db_path, output_dir):
+    """Annotate segmental duplications using ANNOVAR."""
+    logging.info('Annotating segmental duplications using ANNOVAR.')
+
+    annotations_dir = os.path.join(output_dir, 'segdup')
+    logging.info('Creating the output directory for segmental duplications: %s', annotations_dir)
+    cmd = [
+        f"{annovar_path}/table_annovar.pl",
+        annovar_input,
+        db_path,
+        "--buildver hg38",
+        "--out", annotations_dir,
+        "--remove",
+        "--protocol genomicSuperDups",
+        "--operation r",
+        "--nastring .",
+        "-polish"
+    ]
+    try:
+        subprocess.run(" ".join(cmd), shell=True, check=True)
+    except subprocess.CalledProcessError as e:
+        logging.error('Error annotating segmental duplications: %s', e)
+        logging.error('Please check the ANNOVAR path and database path.')
+        sys.exit(1)
+
+    logging.info('Completed annotating segmental duplications using ANNOVAR.')
+
 # Run the program.
-def run(tp_dir, fp_dir, output_directory, annovar_path, db_path):
+def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path, db_path):
     """Train the binary classification model."""
+    buildver = 'hg38'
+
     logging.info('Getting the true positive and false positive VCF files.')
 
-    # Get all *.jl files in the true positive directory.
-    tp_files = [os.path.join(tp_dir, f) for f in os.listdir(tp_dir) if f.endswith('.jl')]
-    # Get all *.jl files in the false positive directory.
-    fp_files = [os.path.join(fp_dir, f) for f in os.listdir(fp_dir) if f.endswith('.jl')]
+    # Convert the BED files to ANNOVAR input format.
+    logging.info('Converting the true positive BED file to ANNOVAR input format.')
+    true_positives_file = bed_to_annovar_input(tp_bed)
+
+    logging.info('Converting the false positive BED file to ANNOVAR input format.')
+    false_positives_file = bed_to_annovar_input(fp_bed)
+
+    # Set up annotations
+    training_datasets = [true_positives_file, false_positives_file]
     
-    # Check if the true positive and false positive directories are empty.
-    if not tp_files:
-        logging.error('No true positive VCF files found in the directory.')
-        return
-    
-    if not fp_files:
-        logging.error('No false positive VCF files found in the directory.')
-        return
 
-    # Print the files.
-    logging.info('True positive VCF files:')
-    for file in tp_files:
-        logging.info(file)
+    # Download the segmental duplication database
+    download_annovar_db(annovar_path, db_path, "genomicSuperDups", buildver)
 
-    logging.info('False positive VCF files:')
-    for file in fp_files:
-        logging.info(file)
+    logging.info('Annotating true positive segmental duplications using ANNOVAR.')
+    annotate_segdup(true_positives_file, annovar_path, db_path, output_directory_annovar)
+    segdup_annotation= os.path.join(output_directory_annovar, 'segdup.' + buildver + '_multianno.txt')
 
-    logging.info('Output directory: %s', output_directory)
-    logging.info('ANNOVAR path: %s', annovar_path)
-    logging.info('ANNOVAR database path: %s', db_path)
+    # Check if the annotation file exists.
+    if not os.path.exists(segdup_annotation):
+        logging.error('Annotation file does not exist: %s', segdup_annotation)
+        logging.error('Please check the ANNOVAR path and database path.')
+        sys.exit(1)
 
-    # Check if the output directory exists.
-    if not os.path.exists(output_directory):
-        logging.info('Creating the output directory.')
-        os.makedirs(output_directory)
+    logging.info('Successfully annotated segmental duplications to file: %s', segdup_annotation)
 
-    model = train(tp_files, fp_files)
 
-    logging.info('Model failed successfully!')
+
+    # logging.info('Output directory: %s', output_directory)
+    # logging.info('ANNOVAR path: %s', annovar_path)
+    # logging.info('ANNOVAR database path: %s', db_path)
+
+    # # Check if the output directory exists.
+    # if not os.path.exists(output_directory):
+    #     logging.info('Creating the output directory.')
+    #     os.makedirs(output_directory)
+
+    # model = train(tp_files, fp_files)
+
+    logging.info('All complete!')
 
     # logging.info('Training the model.')
     # # Train the model using the true positive and false positive VCF files.
@@ -265,9 +368,10 @@ def run(tp_dir, fp_dir, output_directory, annovar_path, db_path):
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--tpdir", required=True, help="Directory containing benchmark VCF files of real SVs (true positives and false negatives)")
-    parser.add_argument("--fpdir", required=True, help="Directory containing false positive VCF files from running the caller on normal samples")
-    parser.add_argument("--outdir", required=True, help="Output directory")
+    parser.add_argument("--tpbed", required=True, help="Directory containing benchmark VCF files of real SVs (true positives and false negatives)")
+    parser.add_argument("--fpbed", required=True, help="Directory containing false positive VCF files from running the caller on normal samples")
+    parser.add_argument("--outdiranno", required=True, help="Output directory for saving the ANNOVAR annotations")
+    parser.add_argument("--outdir", required=True, help="Output directory for saving the model")
     parser.add_argument("--annovar", required=True, help="Path to ANNOVAR")
     parser.add_argument("--annovar_db", required=True, help="Path to ANNOVAR database")
     args = parser.parse_args()
@@ -288,6 +392,6 @@ if __name__ == '__main__':
 
     # Run the program.
     logging.info('Training the model...')
-    run(args.tpdir, args.fpdir, args.outdir, args.annovar, args.annovar_db)
+    run(args.tpbed, args.fpbed, args.outdir, args.outdiranno, args.annovar, args.annovar_db)
     # run(tp_filepath, fp_filepath, output_dir)
     logging.info('done.')
