@@ -264,9 +264,80 @@ def annotate_segdup(annovar_input, annovar_path, db_path, output_dir):
 
     logging.info('Completed annotating segmental duplications using ANNOVAR.')
 
+def annotate(annovar_input, annovar_path, db_path, output_dir):
+    """Annotate regions."""
+    logging.info('Annotating regions using ANNOVAR.')
+
+    annotations_dir = os.path.join(output_dir, 'regions')
+    logging.info('Creating the output directory: %s', annotations_dir)
+    cmd = [
+        f"{annovar_path}/table_annovar.pl",
+        annovar_input,
+        db_path,
+        "--buildver hg38",
+        "--out", annotations_dir,
+        "--remove",
+        "--protocol genomicSuperDups,phastConsElements46way,cytoBand",
+        "--operation r,r,r",
+        "--nastring .",
+        "-polish"
+    ]
+    # "--protocol genomicSuperDups",
+
+    try:
+        subprocess.run(" ".join(cmd), shell=True, check=True)
+    except subprocess.CalledProcessError as e:
+        logging.error('Error annotating: %s', e)
+        logging.error('Please check the ANNOVAR path and database path.')
+        sys.exit(1)
+
+    logging.info('Completed annotations.')
+
+def annotate_bed(annovar_input, annovar_path, db_path, output_dir, bed_file):
+    """Annotate from the BED file using ANNOVAR."""
+    # Use the example: annotate_variation.pl ex1.hg18.avinput humandb/ -bedfile hg18_SureSelect_All_Exon_G3362_with_names.bed -dbtype bed -regionanno -out ex1 
+    logging.info('Annotating from the BED file using ANNOVAR.')
+
+    annotations_dir = os.path.join(output_dir, 'bed')
+    logging.info('Creating the output directory: %s', annotations_dir)
+    cmd = [
+        f"{annovar_path}/annotate_variation.pl",
+        annovar_input,
+        db_path,
+        "-buildver hg38",
+        "-bedfile", bed_file,
+        "-dbtype bed",
+        "-regionanno",
+        "-out", annotations_dir
+    ]
+    # cmd = [
+    #     f"{annovar_path}/table_annovar.pl",
+    #     annovar_input,
+    #     db_path,
+    #     "--buildver hg38",
+    #     "--out", annotations_dir,
+    #     "--remove",
+    #     "--protocol fragileSites",
+    #     "--operation r",
+    #     "--nastring .",
+    #     "-polish"
+    # ]
+
+    try:
+        subprocess.run(" ".join(cmd), shell=True, check=True)
+    except subprocess.CalledProcessError as e:
+        logging.error('Error annotating from the BED file: %s', e)
+        logging.error('Please check the ANNOVAR path and database path.')
+        sys.exit(1)
+
+    logging.info('Completed annotating from the BED file using ANNOVAR.')
+    logging.info('Output directory: %s', annotations_dir)
+
 # Run the program.
 def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path, db_path):
     """Train the binary classification model."""
+
+    # TODO: Make this an input parameter.
     buildver = 'hg38'
 
     logging.info('Getting the true positive and false positive VCF files.')
@@ -278,25 +349,83 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
     logging.info('Converting the false positive BED file to ANNOVAR input format.')
     false_positives_file = bed_to_annovar_input(fp_bed)
 
-    # Set up annotations
-    training_datasets = [true_positives_file, false_positives_file]
-    
+
+    # Annotate the fragile sites using a BED file from HumCFS (GRCh38/hg38).
+    # https://webs.iiitd.edu.in/raghava/humcfs/download.html
+    # ANNOVAR instructions are here: https://annovar.openbioinformatics.org/en/latest/user-guide/region/
+    # fragile_sites_bed="/mnt/isilon/wang_lab/perdomoj/projects/ContextScore/Train/FragileSites/FragileSites_merged.bed"
+    # fragile_sites_bed =
+    # "/mnt/isilon/wang_lab/perdomoj/projects/ContextScore/Train/FragileSites/FragileSites_merged.bed"
+    # fragile_sites_bed =
+    # "/mnt/isilon/wang_lab/perdomoj/projects/ContextScore/Train/FragileSites/FragileSites_merged.bed"
+    fragile_sites_bed = "fragileSites.bed"
+    logging.info('Annotating the fragile sites using the BED file (GRCh38): %s', fragile_sites_bed)
+    if not os.path.exists(fragile_sites_bed):
+        logging.error('Fragile sites BED file does not exist: %s', fragile_sites_bed)
+
+    logging.info('Annotating fragile sites in true positives.')
+    tp_fs_dir = os.path.join(output_directory_annovar, 'TP_FS')
+    if not os.path.exists(tp_fs_dir):
+        os.makedirs(tp_fs_dir)
+
+    annotate_bed(true_positives_file, annovar_path, db_path, tp_fs_dir, fragile_sites_bed)
+
+    logging.info('Annotating fragile sites in false positives.')
+    fp_fs_dir = os.path.join(output_directory_annovar, 'FP_FS')
+    if not os.path.exists(fp_fs_dir):
+        os.makedirs(fp_fs_dir)
+
+    annotate_bed(false_positives_file, annovar_path, db_path, fp_fs_dir, fragile_sites_bed)
+
+    # ---------------------------------------
+    # Region-based annotation using ANNOVAR databases.
+
+    # genomicSuperDups is the segmental duplication database.
+    # phastConsElements46way is the conservation database.
+    # cytoBand is used to annotate the centromere and telomere regions.
 
     # Download the segmental duplication database
     download_annovar_db(annovar_path, db_path, "genomicSuperDups", buildver)
 
-    logging.info('Annotating true positive segmental duplications using ANNOVAR.')
-    annotate_segdup(true_positives_file, annovar_path, db_path, output_directory_annovar)
-    segdup_annotation= os.path.join(output_directory_annovar, 'segdup.' + buildver + '_multianno.txt')
+    # Download the conservation database
+    download_annovar_db(annovar_path, db_path, "phastConsElements46way", buildver)
+
+    # Download the cytoband database
+    download_annovar_db(annovar_path, db_path, "cytoBand", buildver)
+
+    logging.info('Annotating true positivess using ANNOVAR.')
+    tp_anno_dir = os.path.join(output_directory_annovar, 'TP')
+    if not os.path.exists(tp_anno_dir):
+        os.makedirs(tp_anno_dir)
+
+    annotate(true_positives_file, annovar_path, db_path, tp_anno_dir)
+    tp_annotation = os.path.join(tp_anno_dir, 'regions.' + buildver + '_multianno.txt')
 
     # Check if the annotation file exists.
-    if not os.path.exists(segdup_annotation):
-        logging.error('Annotation file does not exist: %s', segdup_annotation)
+    if not os.path.exists(tp_annotation):
+        logging.error('Annotation file does not exist: %s', tp_annotation)
         logging.error('Please check the ANNOVAR path and database path.')
         sys.exit(1)
 
-    logging.info('Successfully annotated segmental duplications to file: %s', segdup_annotation)
+    logging.info('Successfully annotated true positives to file: %s', tp_annotation)
 
+    logging.info('Annotating false positives using ANNOVAR.')
+    fp_anno_dir = os.path.join(output_directory_annovar, 'FP')
+    if not os.path.exists(fp_anno_dir):
+        os.makedirs(fp_anno_dir)
+    annotate(false_positives_file, annovar_path, db_path, fp_anno_dir)
+    fp_annotation = os.path.join(fp_anno_dir, 'regions.' + buildver + '_multianno.txt')
+
+    # Check if the annotation file exists.
+    if not os.path.exists(fp_annotation):
+        logging.error('Annotation file does not exist: %s', fp_annotation)
+        logging.error('Please check the ANNOVAR path and database path.')
+        sys.exit(1)
+
+    logging.info('Successfully annotated false positives to file: %s', fp_annotation)
+
+    # BELOW IS A WIP
+    # -------------------------------
 
 
     # logging.info('Output directory: %s', output_directory)
