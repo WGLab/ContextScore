@@ -203,20 +203,6 @@ def bed_to_annovar_input(bed_file):
 
     return output_file
 
-# def annotate_with_annovar(annovar_input, output_prefix, annovar_path, db_path):
-#     cmd = [
-#         f"{annovar_path}/table_annovar.pl",
-#         annovar_input,
-#         db_path,
-#         "--buildver hg19",
-#         "--out", output_prefix,
-#         "--remove",
-#         "--protocol refGene,cytoBand,dbnsfp35a",
-#         "--operation g,r,f",
-#         "--nastring ."
-#     ]
-#     subprocess.run(" ".join(cmd), shell=True, check=True)
-
 def download_annovar_db(annovar_path, db_path, db_name, buildver):
     """Download the ANNOVAR database if it does not exist."""
     logging.info('Downloading the database:' + db_name)
@@ -284,18 +270,6 @@ def annotate_bed(annovar_input, annovar_path, db_path, output_dir, bed_file):
         "-regionanno",
         "-out", annotations_dir
     ]
-    # cmd = [
-    #     f"{annovar_path}/table_annovar.pl",
-    #     annovar_input,
-    #     db_path,
-    #     "--buildver hg38",
-    #     "--out", annotations_dir,
-    #     "--remove",
-    #     "--protocol fragileSites",
-    #     "--operation r",
-    #     "--nastring .",
-    #     "-polish"
-    # ]
 
     try:
         subprocess.run(" ".join(cmd), shell=True, check=True)
@@ -426,7 +400,21 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
 
     logging.info('Successfully annotated false positives to file: %s', fp_annotation)
 
-    # Now 
+    # Now extract features into a combined dataframe.
+    columns = [
+        "label",
+        "chrom",
+        "start",
+        "sv_length",
+        "sv_type",
+        "segdup",
+        "telomere",
+        "centromere",
+        "fragile_site",
+        "conserved_region"
+    ]
+
+    
 
     # BELOW IS A WIP
     # -------------------------------
