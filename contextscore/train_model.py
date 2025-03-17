@@ -219,14 +219,15 @@ def bed_to_annovar_input(bed_file):
 
 def download_annovar_db(annovar_path, db_path, db_name, buildver):
     """Download the ANNOVAR database if it does not exist."""
-    logging.info('Downloading the database' + db_name)
+    logging.info('Downloading the database:' + db_name)
     cmd = [
         f"{annovar_path}/annotate_variation.pl",
         "-buildver", buildver,
         "-downdb", db_name,
         db_path
     ]
-    
+    # annotate_variation.pl -build hg19 -downdb phastConsElements46way humandb/
+
     # Run the command to download the database.
     logging.info('Running the command to download the database: %s', " ".join(cmd))
     try:
@@ -236,33 +237,6 @@ def download_annovar_db(annovar_path, db_path, db_name, buildver):
         logging.error('Please check the ANNOVAR path and database path.')
         sys.exit(1)
     logging.info('Downloaded the database %s successfully.', db_name)
-
-def annotate_segdup(annovar_input, annovar_path, db_path, output_dir):
-    """Annotate segmental duplications using ANNOVAR."""
-    logging.info('Annotating segmental duplications using ANNOVAR.')
-
-    annotations_dir = os.path.join(output_dir, 'segdup')
-    logging.info('Creating the output directory for segmental duplications: %s', annotations_dir)
-    cmd = [
-        f"{annovar_path}/table_annovar.pl",
-        annovar_input,
-        db_path,
-        "--buildver hg38",
-        "--out", annotations_dir,
-        "--remove",
-        "--protocol genomicSuperDups",
-        "--operation r",
-        "--nastring .",
-        "-polish"
-    ]
-    try:
-        subprocess.run(" ".join(cmd), shell=True, check=True)
-    except subprocess.CalledProcessError as e:
-        logging.error('Error annotating segmental duplications: %s', e)
-        logging.error('Please check the ANNOVAR path and database path.')
-        sys.exit(1)
-
-    logging.info('Completed annotating segmental duplications using ANNOVAR.')
 
 def annotate(annovar_input, annovar_path, db_path, output_dir):
     """Annotate regions."""
@@ -277,8 +251,8 @@ def annotate(annovar_input, annovar_path, db_path, output_dir):
         "--buildver hg38",
         "--out", annotations_dir,
         "--remove",
-        "--protocol genomicSuperDups,phastConsElements46way,cytoBand",
-        "--operation r,r,r",
+        "--protocol genomicSuperDups,cytoBand",
+        "--operation r,r",
         "--nastring .",
         "-polish"
     ]
@@ -360,8 +334,6 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
     # "/mnt/isilon/wang_lab/perdomoj/projects/ContextScore/Train/FragileSites/FragileSites_merged.bed"
     fragile_sites_bed = "fragileSites.bed"
     logging.info('Annotating the fragile sites using the BED file (GRCh38): %s', fragile_sites_bed)
-    if not os.path.exists(fragile_sites_bed):
-        logging.error('Fragile sites BED file does not exist: %s', fragile_sites_bed)
 
     logging.info('Annotating fragile sites in true positives.')
     tp_fs_dir = os.path.join(output_directory_annovar, 'TP_FS')
@@ -369,6 +341,13 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
         os.makedirs(tp_fs_dir)
 
     annotate_bed(true_positives_file, annovar_path, db_path, tp_fs_dir, fragile_sites_bed)
+    # Output is bed.hg38_bed
+    tp_fs_annotation = os.path.join(tp_fs_dir, 'bed.hg38_bed')
+    if not os.path.exists(tp_fs_annotation):
+        logging.error('Annotation file does not exist: %s', tp_fs_annotation)
+        logging.error('Please check the ANNOVAR path and database path.')
+        sys.exit(1)
+    logging.info('Successfully annotated true positives to file: %s', tp_fs_annotation)
 
     logging.info('Annotating fragile sites in false positives.')
     fp_fs_dir = os.path.join(output_directory_annovar, 'FP_FS')
@@ -376,6 +355,29 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
         os.makedirs(fp_fs_dir)
 
     annotate_bed(false_positives_file, annovar_path, db_path, fp_fs_dir, fragile_sites_bed)
+    # Output is bed.hg38_bed
+    fp_fs_annotation = os.path.join(fp_fs_dir, 'bed.hg38_bed')
+    if not os.path.exists(fp_fs_annotation):
+        logging.error('Annotation file does not exist: %s', fp_fs_annotation)
+        logging.error('Please check the ANNOVAR path and database path.')
+        sys.exit(1)
+    logging.info('Successfully annotated false positives to file: %s', fp_fs_annotation)
+
+    # ---------------------------------------
+    # Annotate conserved regions using a UCSC Table Browser BED file for
+    # phastCons100way
+    phastCons_bed = "phastCons100wayHG38_fixed.bed"
+    logging.info('Annotating conserved regions using the BED file (GRCh38): %s', phastCons_bed)
+
+    logging.info('Annotating conserved regions in true positives.')
+    tp_cr_dir = os.path.join(output_directory_annovar, 'TP_CR')
+    if not os.path.exists(tp_cr_dir):
+        os.makedirs(tp_cr_dir)
+    annotate_bed(true_positives_file, annovar_path, db_path, tp_cr_dir, phastCons_bed)
+    # Output is bed.hg38_bed
+    tp_cr_annotation = os.path.join(tp_cr_dir, 'bed.hg38_bed')
+    if not os.path.exists(tp_cr_annotation):
+        logging.error('Annotation file does not exist: %s', tp_cr_annotation)
 
     # ---------------------------------------
     # Region-based annotation using ANNOVAR databases.
@@ -388,7 +390,7 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
     download_annovar_db(annovar_path, db_path, "genomicSuperDups", buildver)
 
     # Download the conservation database
-    download_annovar_db(annovar_path, db_path, "phastConsElements46way", buildver)
+    # download_annovar_db(annovar_path, db_path, "phastConsElements46way", buildver)
 
     # Download the cytoband database
     download_annovar_db(annovar_path, db_path, "cytoBand", buildver)
@@ -423,6 +425,8 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
         sys.exit(1)
 
     logging.info('Successfully annotated false positives to file: %s', fp_annotation)
+
+    # Now 
 
     # BELOW IS A WIP
     # -------------------------------
