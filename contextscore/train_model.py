@@ -50,6 +50,7 @@ import subprocess
 import logging
 import numpy as np
 import joblib
+import pybedtools  # For annotating BED files.
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 import matplotlib.pyplot as plt
@@ -280,33 +281,53 @@ def annotate(annovar_input, annovar_path, db_path, output_dir):
 
     logging.info('Completed annotations.')
 
-def annotate_bed(annovar_input, annovar_path, db_path, output_dir, bed_file):
-    """Annotate from the BED file using ANNOVAR."""
-    # Use the example: annotate_variation.pl ex1.hg18.avinput humandb/ -bedfile hg18_SureSelect_All_Exon_G3362_with_names.bed -dbtype bed -regionanno -out ex1 
-    logging.info('Annotating from the BED file using ANNOVAR.')
+def annotate_bed(input_bed, table_bed):
+    """Annotate a BED file using bedtools."""
+    logging.info('Input BED file: %s', input_bed)
+    logging.info('Table BED file: %s', table_bed)
 
-    annotations_dir = os.path.join(output_dir, 'bed')
-    logging.info('Creating the output directory: %s', annotations_dir)
-    cmd = [
-        f"{annovar_path}/annotate_variation.pl",
-        annovar_input,
-        db_path,
-        "-buildver hg38",
-        "-bedfile", bed_file,
-        "-dbtype bed",
-        "-regionanno",
-        "-out", annotations_dir
-    ]
+    input_bed = pybedtools.BedTool(input_bed)
+    input_count = input_bed.count()
 
-    try:
-        subprocess.run(" ".join(cmd), shell=True, check=True)
-    except subprocess.CalledProcessError as e:
-        logging.error('Error annotating from the BED file: %s', e)
-        logging.error('Please check the ANNOVAR path and database path.')
-        sys.exit(1)
+    table_bed = pybedtools.BedTool(table_bed)
+    table_count = table_bed.count()
 
-    logging.info('Completed annotating from the BED file using ANNOVAR.')
-    logging.info('Output directory: %s', annotations_dir)
+    # logging.info('Input BED file:\n%s', input_bed)
+    # logging.info('Table BED file:\n%s', table_bed)
+
+    # Perform the annotation using bedtools intersect.
+    logging.info('Annotating the BED file using bedtools intersect.')
+    annotated_bed = input_bed.intersect(table_bed, wa=True, wb=True)
+    df = annotated_bed.to_dataframe(
+        names=["chrom", "start", "end", "chr_anno", "start_anno", "end_anno", "name"],
+        usecols=[0, 1, 2, 3, 4, 5, 6],  # Only keep the relevant columns.
+    )
+    
+    # Print first 5 rows of the annotated dataframe.
+    logging.info('Annotated BED dataframe:\n%s', df.head())
+    anno_count = df.shape[0]
+    logging.info('Number of rows in the input BED file: %d', input_count)
+    logging.info('Number of rows in the table BED file: %d', table_count)
+    logging.info('Number of rows in the annotated BED dataframe: %d', anno_count)
+    logging.info("Annotated " + str(anno_count) + " rows from the input BED file with " + str(table_count) + " rows from the table BED file (Percentage: %.2f%%)" % ((anno_count / input_count) * 100))
+
+    # Save the annotated dataframe to a new file.
+    # output_file = "Test_annotated.bed"  # You can change this to your desired output file name.
+    # logging.info('Saving the annotated BED dataframe to %s', output_file)
+    # df.to_csv(output_file, sep='\t', index=False, header=True)
+    # logging.info('Saved the annotated BED dataframe to %s', output_file)
+
+    return df
+
+def add_annotations(df, annotation_file):
+    """Add annotations to the dataframe from the ANNOVAR output file."""
+    logging.info('Adding annotations from: %s', annotation_file)
+
+    # Read the annotation file into a dataframe.
+    anno_df = pd.read_csv(annotation_file, sep='\t', header=None, names=["chrom", "start", "end", "annotation"], comment='#')
+    logging.info('Annotation dataframe:\n%s', anno_df.head())
+
+
 
 # Run the program.
 def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path, db_path):
@@ -339,73 +360,40 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
     # Annotate the fragile sites using a BED file from HumCFS (GRCh38/hg38).
     # https://webs.iiitd.edu.in/raghava/humcfs/download.html
     # ANNOVAR instructions are here: https://annovar.openbioinformatics.org/en/latest/user-guide/region/
-    # fragile_sites_bed="/mnt/isilon/wang_lab/perdomoj/projects/ContextScore/Train/FragileSites/FragileSites_merged.bed"
-    # fragile_sites_bed =
-    # "/mnt/isilon/wang_lab/perdomoj/projects/ContextScore/Train/FragileSites/FragileSites_merged.bed"
-    # fragile_sites_bed =
-    # "/mnt/isilon/wang_lab/perdomoj/projects/ContextScore/Train/FragileSites/FragileSites_merged.bed"
-    fragile_sites_bed = "fragileSites.bed"
+    fragile_sites_bed="/mnt/isilon/wang_lab/perdomoj/projects/ContextScore/Train/FragileSites/FragileSites_merged.bed"
     logging.info('Annotating the fragile sites using the BED file (GRCh38): %s', fragile_sites_bed)
 
     logging.info('Annotating fragile sites in true positives.')
-    tp_fs_dir = os.path.join(output_directory_annovar, 'TP_FS')
-    if not os.path.exists(tp_fs_dir):
-        os.makedirs(tp_fs_dir)
-
-    annotate_bed(true_positives_file, annovar_path, db_path, tp_fs_dir, fragile_sites_bed)
-    # Output is bed.hg38_bed
-    tp_fs_annotation = os.path.join(tp_fs_dir, 'bed.hg38_bed')
-    if not os.path.exists(tp_fs_annotation):
-        logging.error('Annotation file does not exist: %s', tp_fs_annotation)
-        logging.error('Please check the ANNOVAR path and database path.')
-        sys.exit(1)
-    logging.info('Successfully annotated true positives to file: %s', tp_fs_annotation)
+    tp_fragile_sites_df = annotate_bed(tp_bed, fragile_sites_bed)
 
     logging.info('Annotating fragile sites in false positives.')
-    fp_fs_dir = os.path.join(output_directory_annovar, 'FP_FS')
-    if not os.path.exists(fp_fs_dir):
-        os.makedirs(fp_fs_dir)
-
-    annotate_bed(false_positives_file, annovar_path, db_path, fp_fs_dir, fragile_sites_bed)
-    # Output is bed.hg38_bed
-    fp_fs_annotation = os.path.join(fp_fs_dir, 'bed.hg38_bed')
-    if not os.path.exists(fp_fs_annotation):
-        logging.error('Annotation file does not exist: %s', fp_fs_annotation)
-        logging.error('Please check the ANNOVAR path and database path.')
-        sys.exit(1)
-    logging.info('Successfully annotated false positives to file: %s', fp_fs_annotation)
+    fp_fragile_sites_df = annotate_bed(fp_bed, fragile_sites_bed)
 
     # ---------------------------------------
     # Annotate conserved regions using a UCSC Table Browser BED file for
     # phastCons100way
-    phastCons_bed = "phastCons100wayHG38_fixed.bed"
+    # phastCons_bed = "phastCons100wayHG38_fixed.bed"
+    phastCons_bed = "/mnt/isilon/wang_lab/perdomoj/data/UCSC_Tables/phastCons100way_hg38.bed"
     logging.info('Annotating conserved regions using the BED file (GRCh38): %s', phastCons_bed)
 
     logging.info('Annotating conserved regions in true positives.')
-    tp_cr_dir = os.path.join(output_directory_annovar, 'TP_CR')
-    if not os.path.exists(tp_cr_dir):
-        os.makedirs(tp_cr_dir)
-    annotate_bed(true_positives_file, annovar_path, db_path, tp_cr_dir, phastCons_bed)
-    # Output is bed.hg38_bed
-    tp_cr_annotation = os.path.join(tp_cr_dir, 'bed.hg38_bed')
-    if not os.path.exists(tp_cr_annotation):
-        logging.error('Annotation file does not exist: %s', tp_cr_annotation)
+    tp_cons_df = annotate_bed(tp_bed, phastCons_bed)
+
+    logging.info('Annotating conserved regions in false positives.')
+    fp_cons_df = annotate_bed(fp_bed, phastCons_bed)
 
     # ---------------------------------------
     # Annotate simple repeats using a UCSC Table Browser BED file for
     # simpleRepeat
-    simpleRepeat_bed = "simpleRepeatsHG38_fixed.bed"
+    # simpleRepeat_bed = "simpleRepeatsHG38_fixed.bed"
+    simpleRepeat_bed = "/mnt/isilon/wang_lab/perdomoj/data/UCSC_Tables/simple_repeats_hg38.bed"
     logging.info('Annotating simple repeats using the BED file (GRCh38): %s', simpleRepeat_bed)
 
     logging.info('Annotating simple repeats in true positives.')
-    tp_sr_dir = os.path.join(output_directory_annovar, 'TP_SR')
-    if not os.path.exists(tp_sr_dir):
-        os.makedirs(tp_sr_dir)
-    annotate_bed(true_positives_file, annovar_path, db_path, tp_sr_dir, simpleRepeat_bed)
-    # Output is bed.hg38_bed
-    tp_sr_annotation = os.path.join(tp_sr_dir, 'bed.hg38_bed')
-    if not os.path.exists(tp_sr_annotation):
-        logging.error('Annotation file does not exist: %s', tp_sr_annotation)
+    tp_sr_df = annotate_bed(tp_bed, simpleRepeat_bed)
+
+    logging.info('Annotating simple repeats in false positives.')
+    fp_sr_df = annotate_bed(fp_bed, simpleRepeat_bed)
 
     # ---------------------------------------
     # Region-based annotation using ANNOVAR databases.
@@ -423,7 +411,7 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
     # Download the cytoband database
     download_annovar_db(annovar_path, db_path, "cytoBand", buildver)
 
-    logging.info('Annotating true positivess using ANNOVAR.')
+    logging.info('Annotating true positives using ANNOVAR.')
     tp_anno_dir = os.path.join(output_directory_annovar, 'TP')
     if not os.path.exists(tp_anno_dir):
         os.makedirs(tp_anno_dir)
@@ -468,9 +456,44 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
         "conserved_region"
     ]
 
+    # Read the true positive input into a dataframe.
+    logging.info('Reading the true positive input file: %s', true_positives_file)
+    tp_df = pd.read_csv(true_positives_file, sep='\t', header=None, names=["chrom", "start", "end"], usecols=[0, 1, 2])
+
+    # Check if the true positive dataframe is empty.
+    if tp_df.empty:
+        logging.error('True positive dataframe is empty.')
+        sys.exit(1)
+    
+    logging.info('True positive dataframe:\n%s', tp_df.head())
+
+    # Read the false positive input into a dataframe.
+    logging.info('Reading the false positive input file: %s', false_positives_file)
+    fp_df = pd.read_csv(false_positives_file, sep='\t', header=None, names=["chrom", "start", "end"], usecols=[0, 1, 2])
+
+    # Check if the false positive dataframe is empty.
+    if fp_df.empty:
+        logging.error('False positive dataframe is empty.')
+        sys.exit(1)
+
+    # Read the annovar output into a dataframe.
+    logging.info('Reading the true positive annotation file: %s', tp_annotation)
+    tp_anno_df = pd.read_csv(tp_annotation, sep='\t', header=None, comment='#')
+    logging.info('True positive annotation dataframe:\n%s', tp_anno_df.head())
+
+    logging.info('Reading the false positive annotation file: %s', fp_annotation)
+    fp_anno_df = pd.read_csv(fp_annotation, sep='\t', header=None, comment='#')
+    logging.info('False positive annotation dataframe:\n%s', fp_anno_df.head())
+
+    return
+
+    # Add columns for the segmental duplication, telomere, centromere, fragile site,
+    # and conserved region annotations.
+    
+
+
     # BELOW IS A WIP
     # -------------------------------
-
 
     # logging.info('Output directory: %s', output_directory)
     # logging.info('ANNOVAR path: %s', annovar_path)
