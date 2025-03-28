@@ -59,6 +59,32 @@ from extract_features import extract_features
 # Set up the logger.
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+def read_cytoband_file(cytoband_file):
+    """Get the centromere and telomere regions for each chromosome."""
+    cytobands = pd.read_csv(cytoband_file, sep='\t', header=None, names=["chrom", "start", "end", "name", "gieStain"])
+    chrom_dict = {}
+    for chrom in cytobands['chrom'].unique():
+        chrom_df = cytobands[cytobands['chrom'] == chrom]
+        # First and last bands are the telomeres.
+        # First telomere:
+        chrom_dict[chrom] = {
+            'telomerep': chrom_df.iloc[0]['name'],
+            'telomereq': chrom_df.iloc[-1]['name']
+        }
+
+        # Identify the 2 centromeres for p and q (contain "acen").
+        centromere_p = chrom_df[chrom_df['name'].str.contains('acen') & chrom_df['name'].str.contains('p')]
+        centromere_q = chrom_df[chrom_df['name'].str.contains('acen') & chrom_df['name'].str.contains('q')]
+        if not centromere_p.empty:
+            chrom_dict[chrom]['centromerep'] = centromere_p.iloc[0]['name']
+        if not centromere_q.empty:
+            chrom_dict[chrom]['centromereq'] = centromere_q.iloc[0]['name']
+
+        # print("Chromosome:", chrom)
+        # print(chrom_dict[chrom])
+
+    return chrom_dict
+
 def train(tp_files, fp_files):
     """Train the binary classification model."""
 
@@ -81,6 +107,7 @@ def train(tp_files, fp_files):
         "fragile_site",
         "conserved_region"
     ]
+
     tp_data = pd.DataFrame(columns=feature_cols)
     for tp_file in tp_files:
         # Extract the features from the true positive VCF file.
@@ -285,6 +312,11 @@ def annotate_bed(annovar_input, annovar_path, db_path, output_dir, bed_file):
 def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path, db_path):
     """Train the binary classification model."""
 
+    # Set up a dictionary for each chromosome, mapping the cytoband to the
+    # centromere and telomere regions.
+    cytoband_file = "/home/perdomoj/github/ContextScore/data/hg38_cytoband.txt"  # Downloaded from UCSC.
+    chrom_dict = read_cytoband_file(cytoband_file)
+
     # TODO: Make this an input parameter.
     buildver = 'hg38'
 
@@ -297,6 +329,12 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
     logging.info('Converting the false positive BED file to ANNOVAR input format.')
     false_positives_file = bed_to_annovar_input(fp_bed)
 
+    # HPRC tracks:
+    # https://genome.ucsc.edu/cgi-bin/hgTracks?hgsid=2497626981_YO5LtOenyXcMHylL5pvsY90WzIkJ&c=chr6&hgTracksConfigPage=configure&hgtgroup_hprc_close=0#hprcGroup
+    # Current error with hprc90way Multiple Alignment download from UCSC (https://genome.ucsc.edu/cgi-bin/hgTables):
+    # Can't start query:
+    # select bin,chrom,chromStart,chromEnd,extFile,offset,score from hprc90way where chrom='chr1'
+    # mySQL error 1064: You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'offset,score from hprc90way where chrom='chr1'' at line 1 (profile=<noProfile>, host=localhost, db=hg38)
 
     # Annotate the fragile sites using a BED file from HumCFS (GRCh38/hg38).
     # https://webs.iiitd.edu.in/raghava/humcfs/download.html
@@ -352,6 +390,22 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
     tp_cr_annotation = os.path.join(tp_cr_dir, 'bed.hg38_bed')
     if not os.path.exists(tp_cr_annotation):
         logging.error('Annotation file does not exist: %s', tp_cr_annotation)
+
+    # ---------------------------------------
+    # Annotate simple repeats using a UCSC Table Browser BED file for
+    # simpleRepeat
+    simpleRepeat_bed = "simpleRepeatsHG38_fixed.bed"
+    logging.info('Annotating simple repeats using the BED file (GRCh38): %s', simpleRepeat_bed)
+
+    logging.info('Annotating simple repeats in true positives.')
+    tp_sr_dir = os.path.join(output_directory_annovar, 'TP_SR')
+    if not os.path.exists(tp_sr_dir):
+        os.makedirs(tp_sr_dir)
+    annotate_bed(true_positives_file, annovar_path, db_path, tp_sr_dir, simpleRepeat_bed)
+    # Output is bed.hg38_bed
+    tp_sr_annotation = os.path.join(tp_sr_dir, 'bed.hg38_bed')
+    if not os.path.exists(tp_sr_annotation):
+        logging.error('Annotation file does not exist: %s', tp_sr_annotation)
 
     # ---------------------------------------
     # Region-based annotation using ANNOVAR databases.
@@ -413,8 +467,6 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
         "fragile_site",
         "conserved_region"
     ]
-
-    
 
     # BELOW IS A WIP
     # -------------------------------
@@ -495,6 +547,11 @@ if __name__ == '__main__':
     parser.add_argument("--outdir", required=True, help="Output directory for saving the model")
     parser.add_argument("--annovar", required=True, help="Path to ANNOVAR")
     parser.add_argument("--annovar_db", required=True, help="Path to ANNOVAR database")
+
+    # Add flag for whether to train the genomic context model. If not specified,
+    # the default is False (train the model using SV caller features).
+    parser.add_argument("--train_genomic_context", action="store_true", help="Train the genomic context model", default=False)
+
     args = parser.parse_args()
     # Get the command line arguments.
     # if len(sys.argv) != 4:
