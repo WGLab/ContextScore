@@ -354,6 +354,61 @@ def add_annotations(df, annotation_file):
     logging.info('Annotation dataframe:\n%s', anno_df.head())
 
 
+def add_telomere_centromere_segdup(input_df, anno_df, cytoband_dict):
+    """Add telomere, centromere, and segmental duplication annotations to the input dataframe."""
+    for index, row in input_df.iterrows():
+        chrom = row['chrom']
+        start = row['start']
+        end = row['end']
+
+        # Get all corresponding rows with the same chromosome and start/end positions.
+        matching_rows = anno_df[(anno_df['Chr'] == chrom) & (anno_df['Start'] == start) & (anno_df['End'] == end)]
+        if matching_rows.empty:
+            logging.warning('No matching annotation found for index %d: Chromosome: %s, Start: %d, End: %d', index, chrom, start, end)
+            continue  # Skip if no matching annotation is found.
+
+        # Check if any rows have the annotation for segmental duplication.
+        segdup = matching_rows['genomicSuperDups'].dropna().any()  # Check if any value is not NaN.      
+        if segdup:
+            # Get the value after Score=
+            max_score = 0
+            score_found = False
+            for score in matching_rows['genomicSuperDups']:
+                if score == '.':
+                    continue
+
+                # Check if the score starts with 'Score='.
+                elif score.startswith('Score='):
+                    score_found = True
+                    try:
+                        score_value = score.split('Score=')[1]
+                        if ';' in score_value:
+                            score_value = score_value.split(';')[0]
+                        score_value = float(score_value)  # Convert to float.
+
+                        # Keep track of the maximum score found.
+                        if score_value > max_score:
+                            max_score = score_value
+
+                    except (IndexError, ValueError):
+                        logging.warning('Could not parse Score from: %s', score)
+
+            if score_found:
+                input_df.at[index, 'segdup'] = max_score
+
+        # Check if the region is a telomere or centromere.
+        cytoband = matching_rows['cytoBand'].dropna().unique()
+        if cytoband.size > 0:
+            # Get the first cytoband annotation (if multiple are present).
+            cytoband = cytoband[0]  # Take the first one if there are multiple.
+            
+            # Check if the cytoband is a telomere or centromere.
+            is_telomere, is_centromere = get_cytoband_is_c_t(cytoband_dict, chrom, cytoband)
+            
+            # Update the telomere and centromere columns.
+            input_df.at[index, 'telomere'] = is_telomere
+            input_df.at[index, 'centromere'] = is_centromere
+
 
 # Run the program.
 def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path, db_path):
@@ -362,7 +417,7 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
     # Set up a dictionary for each chromosome, mapping the cytoband to the
     # centromere and telomere regions.
     cytoband_file = "/home/perdomoj/github/ContextScore/data/hg38_cytoband.txt"  # Downloaded from UCSC.
-    chrom_dict = read_cytoband_file(cytoband_file)
+    cytoband_dict = read_cytoband_file(cytoband_file)
 
     # TODO: Make this an input parameter.
     buildver = 'hg38'
@@ -390,10 +445,10 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
     logging.info('Annotating the fragile sites using the BED file (GRCh38): %s', fragile_sites_bed)
 
     logging.info('Annotating fragile sites in true positives.')
-    # tp_fragile_sites_df = annotate_bed(tp_bed, fragile_sites_bed)
+    tp_fragile_sites_df = annotate_bed(tp_bed, fragile_sites_bed)
 
     logging.info('Annotating fragile sites in false positives.')
-    # fp_fragile_sites_df = annotate_bed(fp_bed, fragile_sites_bed)
+    fp_fragile_sites_df = annotate_bed(fp_bed, fragile_sites_bed)
 
     # ---------------------------------------
     # Annotate conserved regions using a UCSC Table Browser BED file for
@@ -403,10 +458,10 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
     logging.info('Annotating conserved regions using the BED file (GRCh38): %s', phastCons_bed)
 
     logging.info('Annotating conserved regions in true positives.')
-    # tp_cons_df = annotate_bed(tp_bed, phastCons_bed)
+    tp_cons_df = annotate_bed(tp_bed, phastCons_bed)
 
     logging.info('Annotating conserved regions in false positives.')
-    # fp_cons_df = annotate_bed(fp_bed, phastCons_bed)
+    fp_cons_df = annotate_bed(fp_bed, phastCons_bed)
 
     # ---------------------------------------
     # Annotate simple repeats using a UCSC Table Browser BED file for
@@ -416,10 +471,10 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
     logging.info('Annotating simple repeats using the BED file (GRCh38): %s', simpleRepeat_bed)
 
     logging.info('Annotating simple repeats in true positives.')
-    # tp_sr_df = annotate_bed(tp_bed, simpleRepeat_bed)
+    tp_sr_df = annotate_bed(tp_bed, simpleRepeat_bed)
 
     logging.info('Annotating simple repeats in false positives.')
-    # fp_sr_df = annotate_bed(fp_bed, simpleRepeat_bed)
+    fp_sr_df = annotate_bed(fp_bed, simpleRepeat_bed)
 
     # ---------------------------------------
     # Region-based annotation using ANNOVAR databases.
@@ -465,20 +520,6 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
 
     logging.info('Successfully annotated false positives to file: %s', fp_annotation)
 
-    # Now extract features into a combined dataframe.
-    columns = [
-        "label",
-        "chrom",
-        "start",
-        "sv_length",
-        "sv_type",
-        "segdup",
-        "telomere",
-        "centromere",
-        "fragile_site",
-        "conserved_region"
-    ]
-
     # Read the true positive input into a dataframe.
     logging.info('Reading the true positive input file: %s', true_positives_file)
     tp_df = pd.read_csv(true_positives_file, sep='\t', header=None, names=["chrom", "start", "end"], usecols=[0, 1, 2])
@@ -505,103 +546,137 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
     logging.info('True positive annotation header:\n%s', tp_anno_df.columns)
     logging.info('True positive annotation dataframe:\n%s', tp_anno_df.head())
 
-    # Save the cytobands as a tsv file for debugging.
-    tp_anno_output = 'tp_annotation_debug.tsv'
-    logging.info('Saving the true positive annotation dataframe to %s', tp_anno_output)
-
-    # Get the unique cytoband annotations.
-    # cyto_df = tp_anno_df['cytoBand'].drop_duplicates()
-    # cyto_df.to_csv(tp_anno_output, sep='\t', index=False, header=True)
-    segdup_df = tp_anno_df['genomicSuperDups'].drop_duplicates()
-
-    # Sort the segmental duplication dataframe.
-    segdup_df = segdup_df.sort_values()
-    segdup_df.to_csv(tp_anno_output, sep='\t', index=False, header=True)
-    # tp_anno_df.to_csv(tp_anno_output, sep='\t', index=False, header=True)
-    logging.info('Saved the true positive annotation dataframe to %s', tp_anno_output)
-
     logging.info('Reading the false positive annotation file: %s', fp_annotation)
     fp_anno_df = pd.read_csv(fp_annotation, sep='\t', header=0, comment='#')
     logging.info('False positive annotation header:\n%s', fp_anno_df.columns)
     logging.info('False positive annotation dataframe:\n%s', fp_anno_df.head())
 
-    # Add a telomere and centromere column, and set to true/false using the
-    # cytoband dictionary.
+    # Add the labels to the dataframes.
+    tp_df['label'] = 1
     tp_df['telomere'] = False
     tp_df['centromere'] = False
     tp_df['segdup'] = False
     tp_df['fragile_site'] = False
     tp_df['conserved_region'] = False
+    tp_df['simple_repeat'] = False
+
+    fp_df['label'] = 0
     fp_df['telomere'] = False
     fp_df['centromere'] = False
     fp_df['segdup'] = False
     fp_df['fragile_site'] = False
     fp_df['conserved_region'] = False
-    logging.info('Adding telomere and centromere annotations to true positives.')
-    for index, row in tp_df.iterrows():
-        chrom = row['chrom']
-        start = row['start']
-        end = row['end']
+    fp_df['simple_repeat'] = False
 
-        # Get all corresponding rows with the same chromosome and start/end positions.
-        matching_rows = tp_anno_df[(tp_anno_df['Chr'] == chrom) & (tp_anno_df['Start'] == start) & (tp_anno_df['End'] == end)]
-        if matching_rows.empty:
-            logging.warning('No matching annotation found for index %d: Chromosome: %s, Start: %d, End: %d', index, chrom, start, end)
-            continue  # Skip if no matching annotation is found.
+    logging.info('Adding telomere, centromere, and segmental duplication annotations to true positives.')
+    add_telomere_centromere_segdup(tp_df, tp_anno_df, cytoband_dict)
 
-        # Check if any rows have the annotation for segmental duplication.
-        segdup = matching_rows['genomicSuperDups'].dropna().any()  # Check if any value is not NaN.
-        if segdup:
-            # Get the value after Score=
-            max_score = 0
-            for score in matching_rows['genomicSuperDups']:
-                if score.startswith('Score='):
-                    try:
-                        logging.debug('Parsing Score from: %s', score)
-                        score_value = score.split('Score=')[1]
-                        # Split after comma if there are multiple values.
-                        if ';' in score_value:
-                            score_value = score_value.split(';')[0]
-                        score_value = float(score_value)  # Convert to float.
-                        logging.debug('Score found: %.2f', score_value)
+    logging.info('Adding telomere, centromere, and segmental duplication annotations to false positives.')
+    add_telomere_centromere_segdup(fp_df, fp_anno_df, cytoband_dict)
 
-                        # Keep track of the maximum score found.
-                        # This is useful if there are multiple annotations for the same region.
-                        # We want to keep the maximum score found.
-                        if score_value > max_score:
-                            max_score = score_value
+    # Add the fragile site and conserved region annotations
+    logging.info('Adding fragile site annotations to true positives.')
+    tp_df['fragile_site'] = tp_df.merge(tp_fragile_sites_df, on=['chrom', 'start', 'end'], how='left')['chr_anno'].notna()
+    
+    logging.info('Updated df:\n%s', tp_df.head())
 
-                    except (IndexError, ValueError):
-                        logging.warning('Could not parse Score from: %s', score)
+    logging.info('Adding fragile site annotations to false positives.')
+    fp_df['fragile_site'] = fp_df.merge(fp_fragile_sites_df, on=['chrom', 'start', 'end'], how='left')['chr_anno'].notna()
+    logging.info('Updated df:\n%s', fp_df.head())
 
-            # logging.info('Segmental duplication found for index %d: Chromosome: %s, Start: %d, End: %d, Max Score: %.2f', index, chrom, start, end, max_score)
+    # Save the fragile site df to a file.
+    # tp_fragile_output = 'fragile_sites.tsv'
+    # logging.info('Saving the fragile site dataframe to %s', tp_fragile_output)
+    # tp_fragile_sites_df.to_csv(tp_fragile_output, sep='\t', index=False, header=True)
 
-            tp_df.at[index, 'segdup'] = max_score
-        else:
-            logging.info('No segmental duplication found for index %d: Chromosome: %s, Start: %d, End: %d', index, chrom, start, end)
+    # Add the conserved region annotations.
+    logging.info('Adding conserved region annotations to true positives.')
+    tp_df['conserved_region'] = tp_df.merge(tp_cons_df, on=['chrom', 'start', 'end'], how='left')['chr_anno'].notna()
 
-        # Check if the region is a telomere or centromere.
-        cytoband = matching_rows['cytoBand'].dropna().unique()
-        if cytoband.size > 0:
-            # Get the first cytoband annotation (if multiple are present).
-            cytoband = cytoband[0]  # Take the first one if there are multiple.
-            # logging.info('Cytoband found for index %d: Chromosome: %s, Start:
-            # %d, End: %d, Cytoband: %s', index, chrom, start, end, cytoband)
+    logging.info('Adding conserved region annotations to false positives.')
+    fp_df['conserved_region'] = fp_df.merge(fp_cons_df, on=['chrom', 'start', 'end'], how='left')['chr_anno'].notna()
+
+    # Add the simple repeat annotations.
+    logging.info('Adding simple repeat annotations to true positives.')
+    tp_df['simple_repeat'] = tp_df.merge(tp_sr_df, on=['chrom', 'start', 'end'], how='left')['chr_anno'].notna()
+
+    logging.info('Adding simple repeat annotations to false positives.')
+    fp_df['simple_repeat'] = fp_df.merge(fp_sr_df, on=['chrom', 'start', 'end'], how='left')['chr_anno'].notna()
+
+    # Print a tab-delimited table with the number of rows in each category.
+    logging.info('True positives:')
+    logging.info('Total\tFragile Sites\tTelomeres\tCentromeres\tSegmental Duplications\tConserved Regions')
+    logging.info('%d\t%d\t%d\t%d\t%d\t%d', tp_df.shape[0], tp_df['fragile_site'].sum(), tp_df['telomere'].sum(), tp_df['centromere'].sum(), tp_df['segdup'].sum(), tp_df['conserved_region'].sum())
+
+    logging.info('False positives:')
+    logging.info('Total\tFragile Sites\tTelomeres\tCentromeres\tSegmental Duplications\tConserved Regions')
+    logging.info('%d\t%d\t%d\t%d\t%d\t%d', fp_df.shape[0], fp_df['fragile_site'].sum(), fp_df['telomere'].sum(), fp_df['centromere'].sum(), fp_df['segdup'].sum(), fp_df['conserved_region'].sum())
+
+    # Save the same table to a file.
+    annot_summary = 'TrainingAnnotationsSummary.tsv'
+    logging.info('Saving the true positive summary to %s', tp_output)
+    with open(annot_summary, 'w') as f:
+        f.write('True Positives\n')
+        f.write('Total\tFragile Sites\tTelomeres\tCentromeres\tSegmental Duplications\tConserved Regions\n')
+        f.write('%d\t%d\t%d\t%d\t%d\t%d\n' % (tp_df.shape[0], tp_df['fragile_site'].sum(), tp_df['telomere'].sum(), tp_df['centromere'].sum(), tp_df['segdup'].sum(), tp_df['conserved_region'].sum()))
+        f.write('\n')
+        f.write('False Positives\n')
+        f.write('Total\tFragile Sites\tTelomeres\tCentromeres\tSegmental Duplications\tConserved Regions\n')
+        f.write('%d\t%d\t%d\t%d\t%d\t%d\n' % (fp_df.shape[0], fp_df['fragile_site'].sum(), fp_df['telomere'].sum(), fp_df['centromere'].sum(), fp_df['segdup'].sum(), fp_df['conserved_region'].sum()))
+
+    logging.info('Saved the summary to %s', annot_summary)
+    # for index, row in tp_df.iterrows():
+    #     chrom = row['chrom']
+    #     start = row['start']
+    #     end = row['end']
+
+    #     # Get all corresponding rows with the same chromosome and start/end positions.
+    #     matching_rows = tp_anno_df[(tp_anno_df['Chr'] == chrom) & (tp_anno_df['Start'] == start) & (tp_anno_df['End'] == end)]
+    #     if matching_rows.empty:
+    #         logging.warning('No matching annotation found for index %d: Chromosome: %s, Start: %d, End: %d', index, chrom, start, end)
+    #         continue  # Skip if no matching annotation is found.
+
+    #     # Check if any rows have the annotation for segmental duplication.
+    #     segdup = matching_rows['genomicSuperDups'].dropna().any()  # Check if any value is not NaN.      
+    #     if segdup:
+    #         # Get the value after Score=
+    #         max_score = 0
+    #         score_found = False
+    #         for score in matching_rows['genomicSuperDups']:
+    #             if score == '.':
+    #                 continue
+
+    #             # Check if the score starts with 'Score='.
+    #             elif score.startswith('Score='):
+    #                 score_found = True
+    #                 try:
+    #                     score_value = score.split('Score=')[1]
+    #                     if ';' in score_value:
+    #                         score_value = score_value.split(';')[0]
+    #                     score_value = float(score_value)  # Convert to float.
+
+    #                     # Keep track of the maximum score found.
+    #                     if score_value > max_score:
+    #                         max_score = score_value
+
+    #                 except (IndexError, ValueError):
+    #                     logging.warning('Could not parse Score from: %s', score)
+
+    #         if score_found:
+    #             tp_df.at[index, 'segdup'] = max_score
+
+    #     # Check if the region is a telomere or centromere.
+    #     cytoband = matching_rows['cytoBand'].dropna().unique()
+    #     if cytoband.size > 0:
+    #         # Get the first cytoband annotation (if multiple are present).
+    #         cytoband = cytoband[0]  # Take the first one if there are multiple.
             
-            # Check if the cytoband is a telomere or centromere.
-            is_telomere, is_centromere = get_cytoband_is_c_t(chrom_dict, chrom, cytoband)
-            # if is_telomere:
-            #     logging.info('Telomere found for index %d: Chromosome: %s, Start: %d, End: %d', index, chrom, start, end)
-            # if is_centromere:
-            #     logging.info('Centromere found for index %d: Chromosome: %s,
-            #     Start: %d, End: %d', index, chrom, start, end)
+    #         # Check if the cytoband is a telomere or centromere.
+    #         is_telomere, is_centromere = get_cytoband_is_c_t(chrom_dict, chrom, cytoband)
             
-            # Update the telomere and centromere columns.
-            tp_df.at[index, 'telomere'] = is_telomere
-            tp_df.at[index, 'centromere'] = is_centromere
-        # else:
-        #     logging.info('No cytoband found for index %d: Chromosome: %s, Start: %d, End: %d', index, chrom, start, end)
-
+    #         # Update the telomere and centromere columns.
+    #         tp_df.at[index, 'telomere'] = is_telomere
+    #         tp_df.at[index, 'centromere'] = is_centromere
     return
 
     # Add columns for the segmental duplication, telomere, centromere, fragile site,
