@@ -50,7 +50,8 @@ import subprocess
 import logging
 import numpy as np
 import joblib
-import pybedtools  # For annotating BED files.
+from io import StringIO
+# import pybedtools  # For annotating BED files.
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 import matplotlib.pyplot as plt
@@ -200,34 +201,85 @@ def annotate(annovar_input, annovar_path, db_path, output_dir):
 
     logging.info('Completed annotations.')
 
-def annotate_bed(input_bed, table_bed):
-    """Annotate a BED file using bedtools."""
-    logging.info('Input BED file: %s', input_bed)
-    logging.info('Table BED file: %s', table_bed)
+def run_bedtools_intersect(input_bed, table_bed):
+    """Run bedtools intersect to annotate the BED file."""
+    # Check if bedtools is installed.
+    try:
+        subprocess.run(["bedtools", "--version"], check=True)
+    except subprocess.CalledProcessError:
+        logging.error('bedtools is not installed. Please install bedtools.')
+        sys.exit(1)
 
-    input_bed = pybedtools.BedTool(input_bed)
-    input_count = input_bed.count()
+    # Check if the input BED file exists.
+    if not os.path.exists(input_bed):
+        logging.error('Input BED file does not exist: %s', input_bed)
+        sys.exit(1)
 
-    table_bed = pybedtools.BedTool(table_bed)
-    table_count = table_bed.count()
+    # Check if the table BED file exists.
+    if not os.path.exists(table_bed):
+        logging.error('Table BED file does not exist: %s', table_bed)
+        sys.exit(1)
 
-    # Perform the annotation using bedtools intersect.
-    logging.info('Annotating the BED file using bedtools intersect.')
-    annotated_bed = input_bed.intersect(table_bed, wa=True, wb=True)
-    df = annotated_bed.to_dataframe(
-        names=["chrom", "start", "end", "chr_anno", "start_anno", "end_anno", "name"],
-        usecols=[0, 1, 2, 3, 4, 5, 6],  # Only keep the relevant columns.
-    )
+    # Run bedtools intersect to annotate the BED file.
+    cmd = [
+        "bedtools", "intersect",
+        "-a", input_bed,
+        "-b", table_bed,
+        "-wa", "-wb"
+    ]
+    logging.info('Running the command to annotate the BED file: %s', " ".join(cmd))
+    try:
+        result = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, text=True)
+
+        # Parse the output of bedtools intersect into a pandas DataFrame.
+        logging.info('Parsing the output of bedtools intersect.')
+        annotated_bed = pd.read_csv(
+            StringIO(result.stdout),
+            sep='\t',
+            header=None,
+            names=["chrom", "start", "end", "chr_anno", "start_anno", "end_anno", "name"],
+            usecols=[0, 1, 2, 3, 4, 5, 6]
+        )
+
+        # Print the first few rows of the annotated BED file.
+        logging.info('Annotated BED file:\n%s', annotated_bed.head())
+
+        return annotated_bed
+
+    except subprocess.CalledProcessError as e:
+        logging.error('Error annotating the BED file: %s', e)
+        logging.error('Please check the input and table BED files.')
+        sys.exit(1)
+
+
+# def run_bedtools_intersect(input_bed, table_bed):
+#     """Annotate a BED file using bedtools."""
+#     logging.info('Input BED file: %s', input_bed)
+#     logging.info('Table BED file: %s', table_bed)
+
+#     input_bed = pybedtools.BedTool(input_bed)
+#     input_count = input_bed.count()
+
+#     table_bed = pybedtools.BedTool(table_bed)
+#     table_count = table_bed.count()
+
+#     # Perform the annotation using bedtools intersect.
+#     logging.info('Annotating the BED file using bedtools intersect.')
+#     annotated_bed = input_bed.intersect(table_bed, wa=True, wb=True)
+#     df = annotated_bed.to_dataframe(
+#         names=["chrom", "start", "end", "chr_anno", "start_anno", "end_anno", "name"],
+#         usecols=[0, 1, 2, 3, 4, 5, 6],  # Only keep the relevant columns.
+#     )
     
-    # Print first 5 rows of the annotated dataframe.
-    logging.info('Annotated BED dataframe:\n%s', df.head())
-    anno_count = df.shape[0]
-    logging.info('Number of rows in the input BED file: %d', input_count)
-    logging.info('Number of rows in the table BED file: %d', table_count)
-    logging.info('Number of rows in the annotated BED dataframe: %d', anno_count)
-    logging.info("Annotated " + str(anno_count) + " rows from the input BED file with " + str(table_count) + " rows from the table BED file (Percentage: %.2f%%)" % ((anno_count / input_count) * 100))
+#     # Print first 5 rows of the annotated dataframe.
+#     logging.info('Annotated BED dataframe:\n%s', df.head())
+#     anno_count = df.shape[0]
+#     logging.info('Number of rows in the input BED file: %d', input_count)
+#     logging.info('Number of rows in the table BED file: %d', table_count)
+#     logging.info('Number of rows in the annotated BED dataframe: %d', anno_count)
+#     logging.info("Annotated " + str(anno_count) + " rows from the input BED file with " + str(table_count) + " rows from the table BED file (Percentage: %.2f%%)" % ((anno_count / input_count) * 100))
 
-    return df
+#     return df
 
 def add_annotations(df, annotation_file):
     """Add annotations to the dataframe from the ANNOVAR output file."""
@@ -272,59 +324,6 @@ def add_telomere_centromere_segdup(input_df, anno_df, cytoband_dict):
 
     return final_df
 
-    # for index, row in input_df.iterrows():
-    #     chrom = row['chrom']
-    #     start = row['start']
-    #     end = row['end']
-
-    #     # Get all corresponding rows with the same chromosome and start/end positions.
-    #     matching_rows = anno_df[(anno_df['Chr'] == chrom) & (anno_df['Start'] == start) & (anno_df['End'] == end)]
-    #     if matching_rows.empty:
-    #         logging.warning('No matching annotation found for index %d: Chromosome: %s, Start: %d, End: %d', index, chrom, start, end)
-    #         continue  # Skip if no matching annotation is found.
-
-    #     # Check if any rows have the annotation for segmental duplication.
-    #     segdup = matching_rows['genomicSuperDups'].dropna().any()  # Check if any value is not NaN.      
-    #     if segdup:
-    #         # Get the value after Score=
-    #         max_score = 0
-    #         score_found = False
-    #         for score in matching_rows['genomicSuperDups']:
-    #             if score == '.':
-    #                 continue
-
-    #             # Check if the score starts with 'Score='.
-    #             elif score.startswith('Score='):
-    #                 score_found = True
-    #                 try:
-    #                     score_value = score.split('Score=')[1]
-    #                     if ';' in score_value:
-    #                         score_value = score_value.split(';')[0]
-    #                     score_value = float(score_value)  # Convert to float.
-
-    #                     # Keep track of the maximum score found.
-    #                     if score_value > max_score:
-    #                         max_score = score_value
-
-    #                 except (IndexError, ValueError):
-    #                     logging.warning('Could not parse Score from: %s', score)
-
-    #         if score_found:
-    #             input_df.at[index, 'segdup'] = max_score
-
-    #     # Check if the region is a telomere or centromere.
-    #     cytoband = matching_rows['cytoBand'].dropna().unique()
-    #     if cytoband.size > 0:
-    #         # Get the first cytoband annotation (if multiple are present).
-    #         cytoband = cytoband[0]  # Take the first one if there are multiple.
-            
-    #         # Check if the cytoband is a telomere or centromere.
-    #         is_telomere, is_centromere = get_cytoband_is_c_t(cytoband_dict, chrom, cytoband)
-            
-    #         # Update the telomere and centromere columns.
-    #         input_df.at[index, 'telomere'] = is_telomere
-    #         input_df.at[index, 'centromere'] = is_centromere
-
 
 # Run the program.
 def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path, db_path):
@@ -361,10 +360,10 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
     logging.info('Annotating the fragile sites using the BED file (GRCh38): %s', fragile_sites_bed)
 
     logging.info('Annotating fragile sites in true positives.')
-    tp_fragile_sites_df = annotate_bed(tp_bed, fragile_sites_bed)
+    tp_fragile_sites_df = run_bedtools_intersect(tp_bed, fragile_sites_bed)
 
     logging.info('Annotating fragile sites in false positives.')
-    fp_fragile_sites_df = annotate_bed(fp_bed, fragile_sites_bed)
+    fp_fragile_sites_df = run_bedtools_intersect(fp_bed, fragile_sites_bed)
 
     # ---------------------------------------
     # Annotate conserved regions using a UCSC Table Browser BED file for
@@ -373,10 +372,10 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
     logging.info('Annotating conserved regions using the BED file (GRCh38): %s', phastCons_bed)
 
     logging.info('Annotating conserved regions in true positives.')
-    tp_cons_df = annotate_bed(tp_bed, phastCons_bed)
+    tp_cons_df = run_bedtools_intersect(tp_bed, phastCons_bed)
 
     logging.info('Annotating conserved regions in false positives.')
-    fp_cons_df = annotate_bed(fp_bed, phastCons_bed)
+    fp_cons_df = run_bedtools_intersect(fp_bed, phastCons_bed)
 
     # ---------------------------------------
     # Annotate simple repeats using a UCSC Table Browser BED file for
@@ -385,10 +384,10 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
     logging.info('Annotating simple repeats using the BED file (GRCh38): %s', simpleRepeat_bed)
 
     logging.info('Annotating simple repeats in true positives.')
-    tp_sr_df = annotate_bed(tp_bed, simpleRepeat_bed)
+    tp_sr_df = run_bedtools_intersect(tp_bed, simpleRepeat_bed)
 
     logging.info('Annotating simple repeats in false positives.')
-    fp_sr_df = annotate_bed(fp_bed, simpleRepeat_bed)
+    fp_sr_df = run_bedtools_intersect(fp_bed, simpleRepeat_bed)
 
     # ---------------------------------------
     # Region-based annotation using ANNOVAR databases.
@@ -467,17 +466,17 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
 
     # Add the labels to the dataframes.
     tp_df['label'] = 1
-    tp_df['telomere'] = False
-    tp_df['centromere'] = False
-    tp_df['segdup'] = False
+    # tp_df['telomere'] = False
+    # tp_df['centromere'] = False
+    # tp_df['segdup'] = False
     tp_df['fragile_site'] = False
     tp_df['conserved_region'] = False
     tp_df['simple_repeat'] = False
 
     fp_df['label'] = 0
-    fp_df['telomere'] = False
-    fp_df['centromere'] = False
-    fp_df['segdup'] = False
+    # fp_df['telomere'] = False
+    # fp_df['centromere'] = False
+    # fp_df['segdup'] = False
     fp_df['fragile_site'] = False
     fp_df['conserved_region'] = False
     fp_df['simple_repeat'] = False
@@ -515,6 +514,10 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
     # Check if the annotations were added correctly.
     logging.info('True positive dataframe after adding annotations:\n%s', tp_df.head())
     logging.info('TP fragile sites: %d', tp_df['fragile_site'].sum())
+
+    # Print the first 10 telomeres values
+    logging.info('[TEST] TP telomeres:\n%s', tp_df['telomere'].head(10))
+
     logging.info('TP telomeres: %d', tp_df['telomere'].sum())
     logging.info('TP centromeres: %d', tp_df['centromere'].sum())
     logging.info('TP segmental duplications: %d', tp_df['segdup'].sum())
