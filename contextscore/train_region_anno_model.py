@@ -112,113 +112,6 @@ def get_cytoband_is_c_t(chrom_dict, chrom, cytoband):
     
     return is_telomere, is_centromere
 
-def train(tp_files, fp_files):
-    """Train the binary classification model."""
-
-    # Extract the features from the VCF files.
-    logging.info('Extracting features from the true positive VCF file.')
-    
-    # Set up the dataframe with all the features.
-    feature_cols=[
-        "label",
-        "chrom",
-        "start",
-        "sv_length",
-        "sv_type",
-        "cluster_size",
-        "hmm_llh",
-        "segdup",
-        "repeatregions",
-        "telomere",
-        "centromere",
-        "fragile_site",
-        "conserved_region"
-    ]
-
-    tp_data = pd.DataFrame(columns=feature_cols)
-    for tp_file in tp_files:
-        # Extract the features from the true positive VCF file.
-        tp_data = pd.concat([tp_data, extract_features(tp_file)], ignore_index=True)
-        logging.info('Extracted features from %s', tp_file)
-
-    # Check if the true positive data is empty.
-    if tp_data.empty:
-        logging.error('True positive data is empty.')
-        sys.exit(1)
-
-    for fp_file in fp_files:
-        logging.info('Extracting features from the false positive VCF file.')
-        # Extract the features from the false positive VCF file.
-        fp_data = extract_features(fp_file)
-        logging.info('Extracted features from %s', fp_file)
-
-    # Check if the false positive data is empty.
-    if fp_data.empty:
-        logging.error('False positive data is empty.')
-        sys.exit(1)
-
-    # Check if any features are missing.
-    if tp_data.isnull().values.any():
-        logging.error('Features are missing.')
-
-        # Get the rows with missing features.
-        missing_features = tp_data[tp_data.isnull().any(axis=1)]
-
-        # Print the rows with missing features.
-        logging.error(missing_features)
-        sys.exit(1)
-
-    logging.info('Extracting features from the false positive VCF file.')
-    fp_data = extract_features(false_positives_filepath)
-
-    # Check if any features are missing.
-    if fp_data.isnull().values.any():
-        logging.error('Features are missing.')
-
-        # Get the rows with missing features.
-        missing_features = fp_data[fp_data.isnull().any(axis=1)]
-
-        # Print the rows with missing features.
-        logging.error(missing_features)
-        sys.exit(1)
-
-    # Add the labels.
-    tp_data['label'] = 1
-    fp_data['label'] = 0
-
-    # Print the number of true positives and false positives.
-    logging.info('Number of true labels: %d', tp_data.shape[0])
-    logging.info('Number of false labels: %d', fp_data.shape[0])
-
-    # Combine the true positive and false positive data.
-    data = pd.concat([tp_data, fp_data])
-
-    # Get the features and labels.
-    features = data[["chrom", "start", "sv_length", "sv_type", "read_support", "clipped_bases"]]
-    labels = data["label"]
-
-    # Check if any features are missing.
-    if features.isnull().values.any():
-        logging.error('Features are missing.')
-
-        # Get the rows with missing features.
-        missing_features = features[features.isnull().any(axis=1)]
-
-        # Print the rows with missing features.
-        logging.error(missing_features)
-        sys.exit(1)
-
-    # Check if any labels are missing.
-    if labels.isnull().values.any():
-        logging.error('Labels are missing.')
-        sys.exit(1)
-
-    # Train the model.
-    model = LogisticRegression()
-    model.fit(features, labels)
-
-    # Return the model.
-    return model
 
 def bed_to_annovar_input(bed_file):
     """Convert the BED file to ANNOVAR input format."""
@@ -318,9 +211,6 @@ def annotate_bed(input_bed, table_bed):
     table_bed = pybedtools.BedTool(table_bed)
     table_count = table_bed.count()
 
-    # logging.info('Input BED file:\n%s', input_bed)
-    # logging.info('Table BED file:\n%s', table_bed)
-
     # Perform the annotation using bedtools intersect.
     logging.info('Annotating the BED file using bedtools intersect.')
     annotated_bed = input_bed.intersect(table_bed, wa=True, wb=True)
@@ -337,12 +227,6 @@ def annotate_bed(input_bed, table_bed):
     logging.info('Number of rows in the annotated BED dataframe: %d', anno_count)
     logging.info("Annotated " + str(anno_count) + " rows from the input BED file with " + str(table_count) + " rows from the table BED file (Percentage: %.2f%%)" % ((anno_count / input_count) * 100))
 
-    # Save the annotated dataframe to a new file.
-    # output_file = "Test_annotated.bed"  # You can change this to your desired output file name.
-    # logging.info('Saving the annotated BED dataframe to %s', output_file)
-    # df.to_csv(output_file, sep='\t', index=False, header=True)
-    # logging.info('Saved the annotated BED dataframe to %s', output_file)
-
     return df
 
 def add_annotations(df, annotation_file):
@@ -355,59 +239,91 @@ def add_annotations(df, annotation_file):
 
 
 def add_telomere_centromere_segdup(input_df, anno_df, cytoband_dict):
-    """Add telomere, centromere, and segmental duplication annotations to the input dataframe."""
-    for index, row in input_df.iterrows():
-        chrom = row['chrom']
-        start = row['start']
-        end = row['end']
+    """Add telomere, centromere, and segmental duplication annotations to the
+    input dataframe."""
+    
+    # Merge the input dataframe with the annotation dataframe
+    logging.info('Merging the input dataframe with the annotation dataframe.')
+    merged_df = input_df.merge(anno_df, left_on=['chrom', 'start', 'end'], right_on=['Chr', 'Start', 'End'], how='left')
+    logging.info('Merged dataframe:\n%s', merged_df.head())
 
-        # Get all corresponding rows with the same chromosome and start/end positions.
-        matching_rows = anno_df[(anno_df['Chr'] == chrom) & (anno_df['Start'] == start) & (anno_df['End'] == end)]
-        if matching_rows.empty:
-            logging.warning('No matching annotation found for index %d: Chromosome: %s, Start: %d, End: %d', index, chrom, start, end)
-            continue  # Skip if no matching annotation is found.
+    # Extract segmental duplication scores
+    def extract_max_score(score_series):
+        """Extract and return the maximum Score= value from a series."""
+        scores = score_series.str.extract(r'Score=([\d\.]+)')[0].dropna().astype(float)
+        return scores.max() if not scores.empty else np.nan
+        
+    # Get the maximum score for segmental duplications.
+    merged_df['segdup'] = extract_max_score(merged_df['genomicSuperDups'])
 
-        # Check if any rows have the annotation for segmental duplication.
-        segdup = matching_rows['genomicSuperDups'].dropna().any()  # Check if any value is not NaN.      
-        if segdup:
-            # Get the value after Score=
-            max_score = 0
-            score_found = False
-            for score in matching_rows['genomicSuperDups']:
-                if score == '.':
-                    continue
+    # Determine centromere and telomere regions using vectorized operations.
+    def get_cyto_info(row):
+        """Get telomere and centromere information for a row."""
+        if pd.notna(row['cytoBand']):
+            return get_cytoband_is_c_t(cytoband_dict, row['chrom'], row['cytoBand'])
+        return (np.nan, np.nan)
+    
+    merged_df[['telomere', 'centromere']] = merged_df.apply(get_cyto_info, axis=1, result_type='expand')
 
-                # Check if the score starts with 'Score='.
-                elif score.startswith('Score='):
-                    score_found = True
-                    try:
-                        score_value = score.split('Score=')[1]
-                        if ';' in score_value:
-                            score_value = score_value.split(';')[0]
-                        score_value = float(score_value)  # Convert to float.
+    # Select only necessary columns for the final output.
+    final_cols = list(input_df.columns) + ['segdup', 'telomere', 'centromere']
+    final_df = merged_df[final_cols]
+    logging.info('Final dataframe:\n%s', final_df.head())
 
-                        # Keep track of the maximum score found.
-                        if score_value > max_score:
-                            max_score = score_value
+    return final_df
 
-                    except (IndexError, ValueError):
-                        logging.warning('Could not parse Score from: %s', score)
+    # for index, row in input_df.iterrows():
+    #     chrom = row['chrom']
+    #     start = row['start']
+    #     end = row['end']
 
-            if score_found:
-                input_df.at[index, 'segdup'] = max_score
+    #     # Get all corresponding rows with the same chromosome and start/end positions.
+    #     matching_rows = anno_df[(anno_df['Chr'] == chrom) & (anno_df['Start'] == start) & (anno_df['End'] == end)]
+    #     if matching_rows.empty:
+    #         logging.warning('No matching annotation found for index %d: Chromosome: %s, Start: %d, End: %d', index, chrom, start, end)
+    #         continue  # Skip if no matching annotation is found.
 
-        # Check if the region is a telomere or centromere.
-        cytoband = matching_rows['cytoBand'].dropna().unique()
-        if cytoband.size > 0:
-            # Get the first cytoband annotation (if multiple are present).
-            cytoband = cytoband[0]  # Take the first one if there are multiple.
+    #     # Check if any rows have the annotation for segmental duplication.
+    #     segdup = matching_rows['genomicSuperDups'].dropna().any()  # Check if any value is not NaN.      
+    #     if segdup:
+    #         # Get the value after Score=
+    #         max_score = 0
+    #         score_found = False
+    #         for score in matching_rows['genomicSuperDups']:
+    #             if score == '.':
+    #                 continue
+
+    #             # Check if the score starts with 'Score='.
+    #             elif score.startswith('Score='):
+    #                 score_found = True
+    #                 try:
+    #                     score_value = score.split('Score=')[1]
+    #                     if ';' in score_value:
+    #                         score_value = score_value.split(';')[0]
+    #                     score_value = float(score_value)  # Convert to float.
+
+    #                     # Keep track of the maximum score found.
+    #                     if score_value > max_score:
+    #                         max_score = score_value
+
+    #                 except (IndexError, ValueError):
+    #                     logging.warning('Could not parse Score from: %s', score)
+
+    #         if score_found:
+    #             input_df.at[index, 'segdup'] = max_score
+
+    #     # Check if the region is a telomere or centromere.
+    #     cytoband = matching_rows['cytoBand'].dropna().unique()
+    #     if cytoband.size > 0:
+    #         # Get the first cytoband annotation (if multiple are present).
+    #         cytoband = cytoband[0]  # Take the first one if there are multiple.
             
-            # Check if the cytoband is a telomere or centromere.
-            is_telomere, is_centromere = get_cytoband_is_c_t(cytoband_dict, chrom, cytoband)
+    #         # Check if the cytoband is a telomere or centromere.
+    #         is_telomere, is_centromere = get_cytoband_is_c_t(cytoband_dict, chrom, cytoband)
             
-            # Update the telomere and centromere columns.
-            input_df.at[index, 'telomere'] = is_telomere
-            input_df.at[index, 'centromere'] = is_centromere
+    #         # Update the telomere and centromere columns.
+    #         input_df.at[index, 'telomere'] = is_telomere
+    #         input_df.at[index, 'centromere'] = is_centromere
 
 
 # Run the program.
@@ -453,7 +369,6 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
     # ---------------------------------------
     # Annotate conserved regions using a UCSC Table Browser BED file for
     # phastCons100way
-    # phastCons_bed = "phastCons100wayHG38_fixed.bed"
     phastCons_bed = "/mnt/isilon/wang_lab/perdomoj/data/UCSC_Tables/phastCons100way_hg38.bed"
     logging.info('Annotating conserved regions using the BED file (GRCh38): %s', phastCons_bed)
 
@@ -466,7 +381,6 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
     # ---------------------------------------
     # Annotate simple repeats using a UCSC Table Browser BED file for
     # simpleRepeat
-    # simpleRepeat_bed = "simpleRepeatsHG38_fixed.bed"
     simpleRepeat_bed = "/mnt/isilon/wang_lab/perdomoj/data/UCSC_Tables/simple_repeats_hg38.bed"
     logging.info('Annotating simple repeats using the BED file (GRCh38): %s', simpleRepeat_bed)
 
@@ -569,10 +483,10 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
     fp_df['simple_repeat'] = False
 
     logging.info('Adding telomere, centromere, and segmental duplication annotations to true positives.')
-    add_telomere_centromere_segdup(tp_df, tp_anno_df, cytoband_dict)
+    tp_df = add_telomere_centromere_segdup(tp_df, tp_anno_df, cytoband_dict)
 
     logging.info('Adding telomere, centromere, and segmental duplication annotations to false positives.')
-    add_telomere_centromere_segdup(fp_df, fp_anno_df, cytoband_dict)
+    fp_df = add_telomere_centromere_segdup(fp_df, fp_anno_df, cytoband_dict)
 
     # Add the fragile site and conserved region annotations
     logging.info('Adding fragile site annotations to true positives.')
@@ -583,11 +497,6 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
     logging.info('Adding fragile site annotations to false positives.')
     fp_df['fragile_site'] = fp_df.merge(fp_fragile_sites_df, on=['chrom', 'start', 'end'], how='left')['chr_anno'].notna()
     logging.info('Updated df:\n%s', fp_df.head())
-
-    # Save the fragile site df to a file.
-    # tp_fragile_output = 'fragile_sites.tsv'
-    # logging.info('Saving the fragile site dataframe to %s', tp_fragile_output)
-    # tp_fragile_sites_df.to_csv(tp_fragile_output, sep='\t', index=False, header=True)
 
     # Add the conserved region annotations.
     logging.info('Adding conserved region annotations to true positives.')
@@ -603,6 +512,16 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
     logging.info('Adding simple repeat annotations to false positives.')
     fp_df['simple_repeat'] = fp_df.merge(fp_sr_df, on=['chrom', 'start', 'end'], how='left')['chr_anno'].notna()
 
+    # Check if the annotations were added correctly.
+    logging.info('True positive dataframe after adding annotations:\n%s', tp_df.head())
+    logging.info('TP fragile sites: %d', tp_df['fragile_site'].sum())
+    logging.info('TP telomeres: %d', tp_df['telomere'].sum())
+    logging.info('TP centromeres: %d', tp_df['centromere'].sum())
+    logging.info('TP segmental duplications: %d', tp_df['segdup'].sum())
+    logging.info('TP conserved regions: %d', tp_df['conserved_region'].sum())
+    logging.info('TP simple repeats: %d', tp_df['simple_repeat'].sum())
+
+
     # Print a tab-delimited table with the number of rows in each category.
     logging.info('True positives:')
     logging.info('Total\tFragile Sites\tTelomeres\tCentromeres\tSegmental Duplications\tConserved Regions')
@@ -614,7 +533,7 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
 
     # Save the same table to a file.
     annot_summary = 'TrainingAnnotationsSummary.tsv'
-    logging.info('Saving the true positive summary to %s', tp_output)
+    logging.info('Saving the true positive summary to %s', annot_summary)
     with open(annot_summary, 'w') as f:
         f.write('True Positives\n')
         f.write('Total\tFragile Sites\tTelomeres\tCentromeres\tSegmental Duplications\tConserved Regions\n')
@@ -625,133 +544,6 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
         f.write('%d\t%d\t%d\t%d\t%d\t%d\n' % (fp_df.shape[0], fp_df['fragile_site'].sum(), fp_df['telomere'].sum(), fp_df['centromere'].sum(), fp_df['segdup'].sum(), fp_df['conserved_region'].sum()))
 
     logging.info('Saved the summary to %s', annot_summary)
-    # for index, row in tp_df.iterrows():
-    #     chrom = row['chrom']
-    #     start = row['start']
-    #     end = row['end']
-
-    #     # Get all corresponding rows with the same chromosome and start/end positions.
-    #     matching_rows = tp_anno_df[(tp_anno_df['Chr'] == chrom) & (tp_anno_df['Start'] == start) & (tp_anno_df['End'] == end)]
-    #     if matching_rows.empty:
-    #         logging.warning('No matching annotation found for index %d: Chromosome: %s, Start: %d, End: %d', index, chrom, start, end)
-    #         continue  # Skip if no matching annotation is found.
-
-    #     # Check if any rows have the annotation for segmental duplication.
-    #     segdup = matching_rows['genomicSuperDups'].dropna().any()  # Check if any value is not NaN.      
-    #     if segdup:
-    #         # Get the value after Score=
-    #         max_score = 0
-    #         score_found = False
-    #         for score in matching_rows['genomicSuperDups']:
-    #             if score == '.':
-    #                 continue
-
-    #             # Check if the score starts with 'Score='.
-    #             elif score.startswith('Score='):
-    #                 score_found = True
-    #                 try:
-    #                     score_value = score.split('Score=')[1]
-    #                     if ';' in score_value:
-    #                         score_value = score_value.split(';')[0]
-    #                     score_value = float(score_value)  # Convert to float.
-
-    #                     # Keep track of the maximum score found.
-    #                     if score_value > max_score:
-    #                         max_score = score_value
-
-    #                 except (IndexError, ValueError):
-    #                     logging.warning('Could not parse Score from: %s', score)
-
-    #         if score_found:
-    #             tp_df.at[index, 'segdup'] = max_score
-
-    #     # Check if the region is a telomere or centromere.
-    #     cytoband = matching_rows['cytoBand'].dropna().unique()
-    #     if cytoband.size > 0:
-    #         # Get the first cytoband annotation (if multiple are present).
-    #         cytoband = cytoband[0]  # Take the first one if there are multiple.
-            
-    #         # Check if the cytoband is a telomere or centromere.
-    #         is_telomere, is_centromere = get_cytoband_is_c_t(chrom_dict, chrom, cytoband)
-            
-    #         # Update the telomere and centromere columns.
-    #         tp_df.at[index, 'telomere'] = is_telomere
-    #         tp_df.at[index, 'centromere'] = is_centromere
-    return
-
-    # Add columns for the segmental duplication, telomere, centromere, fragile site,
-    # and conserved region annotations.
-    
-
-
-    # BELOW IS A WIP
-    # -------------------------------
-
-    # logging.info('Output directory: %s', output_directory)
-    # logging.info('ANNOVAR path: %s', annovar_path)
-    # logging.info('ANNOVAR database path: %s', db_path)
-
-    # # Check if the output directory exists.
-    # if not os.path.exists(output_directory):
-    #     logging.info('Creating the output directory.')
-    #     os.makedirs(output_directory)
-
-    # model = train(tp_files, fp_files)
-
-    logging.info('All complete!')
-
-    # logging.info('Training the model.')
-    # # Train the model using the true positive and false positive VCF files.
-    # model = train(true_positives_files, false_positives_files)
-    # logging.info('Model trained successfully.')
-    # # Save the model to the output directory.
-    # model_path = os.path.join(output_directory, "model.pkl")
-    # logging.info('Saving the model to %s', model_path)
-    # joblib.dump(model, model_path)
-    # logging.info('Model saved successfully.')
-
-    # # Print the model.
-    # logging.info('Model: %s', model)
-
-    # # Print the model coefficients.
-    # logging.info('Model coefficients: %s', model.coef_)
-
-    # # Print the model intercept.
-    # logging.info('Model intercept: %s', model.intercept_)
-
-    # # Print the model score.
-    # logging.info('Model score: %s', model.score(features, labels))
-
-    # # Print the model accuracy.
-    # logging.info('Model accuracy: %s', model.score(features, labels))
-
-    # # Print the model precision.
-    # logging.info('Model precision: %s', model.score(features, labels))
-
-    # # Print the model recall.
-    # logging.info('Model recall: %s', model.score(features, labels))
-
-    # # Print the model F1 score.
-    # logging.info('Model F1 score: %s', model.score(features, labels))
-
-    # Check if the output directory is empty.
-    # Train the model.
-    # model = train(true_positives_filepath, false_positives_filepath)
-
-    # # Create the output directory if it does not exist.
-    # if not os.path.exists(output_directory):
-    #     os.makedirs(output_directory)
-
-    # # Save the model
-    # model_path = os.path.join(output_directory, "model.pkl")
-    # joblib.dump(model, model_path)
-
-    # # Print the model.
-    # print(model)
-
-    # Return the model.
-    # return model
-
 
 if __name__ == '__main__':
     import argparse
@@ -766,25 +558,9 @@ if __name__ == '__main__':
     # Add flag for whether to train the genomic context model. If not specified,
     # the default is False (train the model using SV caller features).
     parser.add_argument("--train_genomic_context", action="store_true", help="Train the genomic context model", default=False)
-
     args = parser.parse_args()
-    # Get the command line arguments.
-    # if len(sys.argv) != 4:
-    #     logging.error('Usage: python train_model.py <true_positives_filepath> <false_positives_filepath> <output_directory>\n')
-    #     sys.exit(1)
-
-    # # Input VCF of true positive SV calls obtained from a benchmarking dataset.
-    # tp_filepath = sys.argv[1]
-
-    # # Input VCF of false positive SV calls obtained from running the caller on
-    # # data that is known to be negative for SVs. This data can be obtained by
-    # # running the caller on a normal sample with known SVs accounted for in the
-    # # reference genome.
-    # fp_filepath = sys.argv[2]
-    # output_dir = sys.argv[3]
 
     # Run the program.
     logging.info('Training the model...')
     run(args.tpbed, args.fpbed, args.outdir, args.outdiranno, args.annovar, args.annovar_db)
-    # run(tp_filepath, fp_filepath, output_dir)
     logging.info('done.')

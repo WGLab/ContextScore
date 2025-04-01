@@ -28,9 +28,9 @@ import matplotlib.pyplot as plt
 
 def read_vcf(filepath):
     """Read in the VCF file."""
-    vcf_df = pd.read_csv(filepath, sep='\t', comment='#', header=None, usecols=[0, 1, 7], \
-                         names=['CHROM', 'POS', 'INFO'], \
-                            dtype={'CHROM': str, 'POS': np.int64, 'INFO': str})
+    vcf_df = pd.read_csv(filepath, sep='\t', comment='#', header=None, usecols=[0, 1, 7, 8], \
+                         names=['CHROM', 'POS', 'INFO', 'FORMAT'], \
+                            dtype={'CHROM': str, 'POS': np.int64, 'INFO': str, 'FORMAT': str})
     return vcf_df
 
 def extract_features(input_vcf):
@@ -38,20 +38,27 @@ def extract_features(input_vcf):
     # Read in the VCF file.
     vcf_df = read_vcf(input_vcf)
 
-    # Extract the read and clipped base support from the INFO column.
-    read_support = vcf_df['INFO'].str.extract(r'SUPPORT=(\d+)', expand=False).astype(np.int32)
+    # Extract the alignment type (string) from the INFO column.
+    aln_type = vcf_df['INFO'].str.extract(r'ALN=(\w+)', expand=False)
 
-    # Check if any read depths are missing.
-    if read_support.isnull().values.any():
-        logging.error('Read support is missing.')
-        sys.exit(1)
+    # Extract the cluster size from the INFO column.
+    cluster_size = vcf_df['INFO'].str.extract(r'CLUSTER=(\d+)', expand=False).astype(np.int32)
 
-    clipped_bases = vcf_df['INFO'].str.extract(r'CLIPSUP=(\d+)', expand=False).astype(np.int32)
+    # Set 0 cluster size to nan.
+    cluster_size[cluster_size == 0] = np.nan
 
-    # Check if any clipped bases are missing.
-    if clipped_bases.isnull().values.any():
-        logging.error('Clipped bases is missing.')
-        sys.exit(1)
+    # Extract GT from the FORMAT column.
+    gt = vcf_df['FORMAT'].str.extract(r'GT=(\d+)', expand=False).astype(np.int32)
+
+    # Set ./. GT to nan.
+    gt[gt == './.'] = np.nan
+
+    # Check if any GT values are missing.
+    if gt.isnull().values.any():
+        logging.info('Number of missing GT values: ' + str(gt.isnull().sum()))
+
+    # Extract DP from the FORMAT column.
+    dp = vcf_df['FORMAT'].str.extract(r'DP=(\d+)', expand=False).astype(np.int32)
 
     # Get the array of chromosome names.
     chrom = vcf_df['CHROM']
