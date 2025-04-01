@@ -252,35 +252,6 @@ def run_bedtools_intersect(input_bed, table_bed):
         sys.exit(1)
 
 
-# def run_bedtools_intersect(input_bed, table_bed):
-#     """Annotate a BED file using bedtools."""
-#     logging.info('Input BED file: %s', input_bed)
-#     logging.info('Table BED file: %s', table_bed)
-
-#     input_bed = pybedtools.BedTool(input_bed)
-#     input_count = input_bed.count()
-
-#     table_bed = pybedtools.BedTool(table_bed)
-#     table_count = table_bed.count()
-
-#     # Perform the annotation using bedtools intersect.
-#     logging.info('Annotating the BED file using bedtools intersect.')
-#     annotated_bed = input_bed.intersect(table_bed, wa=True, wb=True)
-#     df = annotated_bed.to_dataframe(
-#         names=["chrom", "start", "end", "chr_anno", "start_anno", "end_anno", "name"],
-#         usecols=[0, 1, 2, 3, 4, 5, 6],  # Only keep the relevant columns.
-#     )
-    
-#     # Print first 5 rows of the annotated dataframe.
-#     logging.info('Annotated BED dataframe:\n%s', df.head())
-#     anno_count = df.shape[0]
-#     logging.info('Number of rows in the input BED file: %d', input_count)
-#     logging.info('Number of rows in the table BED file: %d', table_count)
-#     logging.info('Number of rows in the annotated BED dataframe: %d', anno_count)
-#     logging.info("Annotated " + str(anno_count) + " rows from the input BED file with " + str(table_count) + " rows from the table BED file (Percentage: %.2f%%)" % ((anno_count / input_count) * 100))
-
-#     return df
-
 def add_annotations(df, annotation_file):
     """Add annotations to the dataframe from the ANNOVAR output file."""
     logging.info('Adding annotations from: %s', annotation_file)
@@ -466,17 +437,11 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
 
     # Add the labels to the dataframes.
     tp_df['label'] = 1
-    # tp_df['telomere'] = False
-    # tp_df['centromere'] = False
-    # tp_df['segdup'] = False
     tp_df['fragile_site'] = False
     tp_df['conserved_region'] = False
     tp_df['simple_repeat'] = False
 
     fp_df['label'] = 0
-    # fp_df['telomere'] = False
-    # fp_df['centromere'] = False
-    # fp_df['segdup'] = False
     fp_df['fragile_site'] = False
     fp_df['conserved_region'] = False
     fp_df['simple_repeat'] = False
@@ -515,16 +480,6 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
     logging.info('True positive dataframe after adding annotations:\n%s', tp_df.head())
     logging.info('TP fragile sites: %d', tp_df['fragile_site'].sum())
 
-    # Print the first 10 telomeres values
-    logging.info('[TEST] TP telomeres:\n%s', tp_df['telomere'].head(10))
-
-    logging.info('TP telomeres: %d', tp_df['telomere'].sum())
-    logging.info('TP centromeres: %d', tp_df['centromere'].sum())
-    logging.info('TP segmental duplications: %d', tp_df['segdup'].sum())
-    logging.info('TP conserved regions: %d', tp_df['conserved_region'].sum())
-    logging.info('TP simple repeats: %d', tp_df['simple_repeat'].sum())
-
-
     # Print a tab-delimited table with the number of rows in each category.
     logging.info('True positives:')
     logging.info('Total\tFragile Sites\tTelomeres\tCentromeres\tSegmental Duplications\tConserved Regions')
@@ -535,7 +490,7 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
     logging.info('%d\t%d\t%d\t%d\t%d\t%d', fp_df.shape[0], fp_df['fragile_site'].sum(), fp_df['telomere'].sum(), fp_df['centromere'].sum(), fp_df['segdup'].sum(), fp_df['conserved_region'].sum())
 
     # Save the same table to a file.
-    annot_summary = 'TrainingAnnotationsSummary.tsv'
+    annot_summary = 'linktoscripts/TrainingAnnotationsSummary.tsv'
     logging.info('Saving the true positive summary to %s', annot_summary)
     with open(annot_summary, 'w') as f:
         f.write('True Positives\n')
