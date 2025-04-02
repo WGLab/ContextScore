@@ -53,6 +53,10 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegression
 import matplotlib.pyplot as plt
 
+from sklearn.metrics import roc_curve, auc, precision_recall_curve, confusion_matrix, classification_report
+import matplotlib.pyplot as plt
+import seaborn as sns
+
 from extract_features import extract_features
 
 # Set up the logger.

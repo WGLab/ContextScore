@@ -56,6 +56,10 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegression
 import matplotlib.pyplot as plt
 
+from sklearn.metrics import roc_curve, auc, precision_recall_curve, confusion_matrix, classification_report
+import matplotlib.pyplot as plt
+import seaborn as sns
+
 from extract_features import extract_features
 
 # Set up the logger.
@@ -490,7 +494,7 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
     logging.info('%d\t%d\t%d\t%d\t%d\t%d', fp_df.shape[0], fp_df['fragile_site'].sum(), fp_df['telomere'].sum(), fp_df['centromere'].sum(), fp_df['segdup'].sum(), fp_df['conserved_region'].sum())
 
     # Save the same table to a file.
-    annot_summary = 'linktoscripts/TrainingAnnotationsSummary.tsv'
+    annot_summary = os.path.join(output_directory, 'annotation_summary.txt')
     logging.info('Saving the true positive summary to %s', annot_summary)
     with open(annot_summary, 'w') as f:
         f.write('True Positives\n')
@@ -502,6 +506,108 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
         f.write('%d\t%d\t%d\t%d\t%d\t%d\n' % (fp_df.shape[0], fp_df['fragile_site'].sum(), fp_df['telomere'].sum(), fp_df['centromere'].sum(), fp_df['segdup'].sum(), fp_df['conserved_region'].sum()))
 
     logging.info('Saved the summary to %s', annot_summary)
+
+    # Combine the true positive and false positive data.
+    logging.info('Combining the true positive and false positive data.')
+    data = pd.concat([tp_df, fp_df])
+    logging.info('Combined dataframe:\n%s', data.head())
+
+    # Create a dictionary to map the chromosome names to integer values.
+    logging.info('Creating a dictionary to map the chromosome names to integer values.')
+    chrom_dict = {chrom: i for i, chrom in enumerate(data['chrom'].unique())}
+    # Map the chromosome names to integer values.
+    data['chrom'] = data['chrom'].map(chrom_dict)
+    logging.info('Mapped chromosome names to integer values:\n%s', data.head())
+
+    # Save this map to a file using joblib.
+    chrom_map_path = os.path.join(output_directory, 'chrom_map.pkl')
+    logging.info('Saving the chromosome map to %s', chrom_map_path)
+    joblib.dump(chrom_dict, chrom_map_path)
+    logging.info('Saved the chromosome map to %s', chrom_map_path)
+
+    # Get the features and labels.
+    features = data[["chrom", "start", "end", "label", "fragile_site", "conserved_region", "simple_repeat", "telomere", "centromere", "segdup"]]
+    labels = data["label"]
+
+    # Train the model.
+    logging.info('Training the model.')
+    model = LogisticRegression()
+    model.fit(features, labels)
+
+    # Get predicted probabilities.
+    logging.info('Getting predicted probabilities.')
+    y_pred = model.predict(features)
+    y_prob = model.predict_proba(features)[:, 1]
+
+    # Get the ROC curve.
+    fpr, tpr, thresholds = roc_curve(labels, y_prob)
+    roc_auc = auc(fpr, tpr)
+
+    # Plot the ROC curve.
+    plt.figure()
+    plt.plot(fpr, tpr, color='darkorange', lw=2, label='ROC curve (area = %0.2f)' % roc_auc)
+    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('Receiver Operating Characteristic')
+    plt.legend(loc='lower right')
+    # Save the plot to the output directory.
+    roc_plot_path = os.path.join(output_directory, 'roc_curve.png')
+    plt.savefig(roc_plot_path)
+    plt.close()
+    logging.info('Saved the ROC curve to %s', roc_plot_path)
+
+    # Get the precision-recall curve.
+    precision, recall, thresholds = precision_recall_curve(labels, y_prob)
+    pr_auc = auc(recall, precision)
+
+    # Plot the precision-recall curve.
+    plt.figure()
+    plt.plot(recall, precision, color='blue', lw=2, label='Precision-Recall curve (area = %0.2f)' % pr_auc)
+    plt.xlabel('Recall')
+    plt.ylabel('Precision')
+    plt.title('Precision-Recall Curve')
+    plt.legend(loc='lower left')
+    # Save the plot to the output directory.
+    pr_plot_path = os.path.join(output_directory, 'precision_recall_curve.png')
+    plt.savefig(pr_plot_path)
+    plt.close()
+    logging.info('Saved the Precision-Recall curve to %s', pr_plot_path)
+
+    # Get the confusion matrix.
+    cm = confusion_matrix(labels, y_pred)
+    logging.info('Confusion matrix:\n%s', cm)
+
+    # Plot the confusion matrix using seaborn.
+    plt.figure()
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+    plt.xlabel('Predicted')
+    plt.ylabel('True')
+    plt.title('Confusion Matrix')
+    # Save the plot to the output directory.
+    cm_plot_path = os.path.join(output_directory, 'confusion_matrix.png')
+    plt.savefig(cm_plot_path)
+    plt.close()
+    logging.info('Saved the confusion matrix to %s', cm_plot_path)
+
+    # Print the classification report.
+    logging.info('Classification report:\n%s', classification_report(labels, y_pred))
+
+    # Save the report to a file.
+    report_path = os.path.join(output_directory, 'classification_report.txt')
+    with open(report_path, 'w') as f:
+        f.write(classification_report(labels, y_pred))
+
+    logging.info('Saved the classification report to %s', report_path)
+
+    # Save the model.
+    model_path = os.path.join(output_directory, "anno_model.pkl")
+    logging.info('Saving the model to %s', model_path)
+    joblib.dump(model, model_path)
+    logging.info('Saved the model to %s', model_path)
+
 
 if __name__ == '__main__':
     import argparse
