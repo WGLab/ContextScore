@@ -65,7 +65,6 @@ from sklearn.metrics import roc_curve, auc, precision_recall_curve, confusion_ma
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from extract_features import extract_features
 
 # Set up the logger.
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -654,6 +653,12 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
             f.write(classification_report(labels, y_pred))
 
         logging.info('Saved the classification report to %s', report_path)
+
+        # Save the model.
+        model_path = os.path.join(output_directory, model_name + '_genome_model.pkl')
+        logging.info('Saving the model to %s', model_path)
+        joblib.dump(model, model_path)
+        logging.info('Saved the model to %s', model_path)
 
     # Save the model.
     # model_path = os.path.join(output_directory, "anno_model.pkl")
