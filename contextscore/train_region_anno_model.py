@@ -53,7 +53,12 @@ import joblib
 from io import StringIO
 # import pybedtools  # For annotating BED files.
 import pandas as pd
+
 from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from xgboost import XGBClassifier
+from sklearn.svm import SVC
+
 import matplotlib.pyplot as plt
 
 from sklearn.metrics import roc_curve, auc, precision_recall_curve, confusion_matrix, classification_report
@@ -70,6 +75,11 @@ def read_cytoband_file(cytoband_file):
     cytobands = pd.read_csv(cytoband_file, sep='\t', header=None, names=["chrom", "start", "end", "name", "gieStain"])
     chrom_dict = {}
     for chrom in cytobands['chrom'].unique():
+        
+        # Skip chrM
+        if chrom == 'chrM':
+            continue
+
         chrom_df = cytobands[cytobands['chrom'] == chrom]
         # First and last bands are the telomeres.
         # First telomere:
@@ -314,12 +324,12 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
 
     logging.info('Getting the true positive and false positive VCF files.')
 
+    logging.info('Converting the false positive BED file to ANNOVAR input format.')
+    false_positives_file = bed_to_annovar_input(fp_bed)
+
     # Convert the BED files to ANNOVAR input format.
     logging.info('Converting the true positive BED file to ANNOVAR input format.')
     true_positives_file = bed_to_annovar_input(tp_bed)
-
-    logging.info('Converting the false positive BED file to ANNOVAR input format.')
-    false_positives_file = bed_to_annovar_input(fp_bed)
 
     # HPRC tracks:
     # https://genome.ucsc.edu/cgi-bin/hgTracks?hgsid=2497626981_YO5LtOenyXcMHylL5pvsY90WzIkJ&c=chr6&hgTracksConfigPage=configure&hgtgroup_hprc_close=0#hprcGroup
@@ -480,44 +490,64 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
     logging.info('Adding simple repeat annotations to false positives.')
     fp_df['simple_repeat'] = fp_df.merge(fp_sr_df, on=['chrom', 'start', 'end'], how='left')['chr_anno'].notna()
 
+    # Drop NaN values from the dataframes.
+    logging.info('Dropping NaN values from the dataframes.')
+    tp_df.dropna(inplace=True)
+    fp_df.dropna(inplace=True)
+
+    logging.info('Number of NaN values in the true positive dataframe: %d', tp_df.isna().sum().sum())
+    logging.info('Number of NaN values in the false positive dataframe: %d', fp_df.isna().sum().sum())
+
     # Check if the annotations were added correctly.
     logging.info('True positive dataframe after adding annotations:\n%s', tp_df.head())
     logging.info('TP fragile sites: %d', tp_df['fragile_site'].sum())
 
     # Print a tab-delimited table with the number of rows in each category.
     logging.info('True positives:')
-    logging.info('Total\tFragile Sites\tTelomeres\tCentromeres\tSegmental Duplications\tConserved Regions')
-    logging.info('%d\t%d\t%d\t%d\t%d\t%d', tp_df.shape[0], tp_df['fragile_site'].sum(), tp_df['telomere'].sum(), tp_df['centromere'].sum(), tp_df['segdup'].sum(), tp_df['conserved_region'].sum())
+    logging.info('Total\tFragile Sites\tTelomeres\tCentromeres\tSegmental Duplications\tConserved Regions\tSimple Repeats')
+    logging.info('%d\t%d\t%d\t%d\t%d\t%d\t%d', tp_df.shape[0], tp_df['fragile_site'].sum(), tp_df['telomere'].sum(), tp_df['centromere'].sum(), tp_df['segdup'].sum(), tp_df['conserved_region'].sum(), tp_df['simple_repeat'].sum())
 
     logging.info('False positives:')
-    logging.info('Total\tFragile Sites\tTelomeres\tCentromeres\tSegmental Duplications\tConserved Regions')
-    logging.info('%d\t%d\t%d\t%d\t%d\t%d', fp_df.shape[0], fp_df['fragile_site'].sum(), fp_df['telomere'].sum(), fp_df['centromere'].sum(), fp_df['segdup'].sum(), fp_df['conserved_region'].sum())
+    logging.info('Total\tFragile Sites\tTelomeres\tCentromeres\tSegmental Duplications\tConserved Regions\tSimple Repeats')
+    logging.info('%d\t%d\t%d\t%d\t%d\t%d\t%d', fp_df.shape[0], fp_df['fragile_site'].sum(), fp_df['telomere'].sum(), fp_df['centromere'].sum(), fp_df['segdup'].sum(), fp_df['conserved_region'].sum(), fp_df['simple_repeat'].sum())
 
     # Save the same table to a file.
     annot_summary = os.path.join(output_directory, 'annotation_summary.txt')
     logging.info('Saving the true positive summary to %s', annot_summary)
     with open(annot_summary, 'w') as f:
         f.write('True Positives\n')
-        f.write('Total\tFragile Sites\tTelomeres\tCentromeres\tSegmental Duplications\tConserved Regions\n')
-        f.write('%d\t%d\t%d\t%d\t%d\t%d\n' % (tp_df.shape[0], tp_df['fragile_site'].sum(), tp_df['telomere'].sum(), tp_df['centromere'].sum(), tp_df['segdup'].sum(), tp_df['conserved_region'].sum()))
+        f.write('Total\tFragile Sites\tTelomeres\tCentromeres\tSegmental Duplications\tConserved Regions\tSimple Repeats\n')
+        f.write('%d\t%d\t%d\t%d\t%d\t%d\t%d\n' % (tp_df.shape[0], tp_df['fragile_site'].sum(), tp_df['telomere'].sum(), tp_df['centromere'].sum(), tp_df['segdup'].sum(), tp_df['conserved_region'].sum(), tp_df['simple_repeat'].sum()))
         f.write('\n')
         f.write('False Positives\n')
-        f.write('Total\tFragile Sites\tTelomeres\tCentromeres\tSegmental Duplications\tConserved Regions\n')
-        f.write('%d\t%d\t%d\t%d\t%d\t%d\n' % (fp_df.shape[0], fp_df['fragile_site'].sum(), fp_df['telomere'].sum(), fp_df['centromere'].sum(), fp_df['segdup'].sum(), fp_df['conserved_region'].sum()))
+        f.write('Total\tFragile Sites\tTelomeres\tCentromeres\tSegmental Duplications\tConserved Regions\tSimple Repeats\n')
+        f.write('%d\t%d\t%d\t%d\t%d\t%d\t%d\n' % (fp_df.shape[0], fp_df['fragile_site'].sum(), fp_df['telomere'].sum(), fp_df['centromere'].sum(), fp_df['segdup'].sum(), fp_df['conserved_region'].sum(), fp_df['simple_repeat'].sum()))
 
     logging.info('Saved the summary to %s', annot_summary)
+
+    # Balance the dataset by undersampling the true positives.
+    logging.info('Balancing the TP dataset by undersampling the true positives (count=%d) to match the false positives (count=%d).', tp_df.shape[0], fp_df.shape[0])
+    tp_df = tp_df.sample(n=fp_df.shape[0], random_state=42)
+    logging.info('Number of NaN values in the true positive dataframe after undersampling: %d', tp_df.isna().sum().sum())
 
     # Combine the true positive and false positive data.
     logging.info('Combining the true positive and false positive data.')
     data = pd.concat([tp_df, fp_df])
     logging.info('Combined dataframe:\n%s', data.head())
 
+    logging.info('Number of NaN values in the combined dataframe: %d', data.isna().sum().sum())
+
+    # Load the chromosome to integer mapping.
+    chrom_map_path = "/mnt/isilon/wang_lab/perdomoj/projects/ContextScore/Train/Model/chrom_map.pkl"
+    # logging.info('Loading the chromosome map from %s', chrom_map_path)
+    # chrom_dict = joblib.load(chrom_map_path)
+    # logging.info('Loaded the chromosome map from %s', chrom_map_path)
+    # logging.info('Chromosome map:\n%s', chrom_dict)
+
     # Create a dictionary to map the chromosome names to integer values.
     logging.info('Creating a dictionary to map the chromosome names to integer values.')
     chrom_dict = {chrom: i for i, chrom in enumerate(data['chrom'].unique())}
-    # Map the chromosome names to integer values.
-    data['chrom'] = data['chrom'].map(chrom_dict)
-    logging.info('Mapped chromosome names to integer values:\n%s', data.head())
+    logging.info('Chromosome map:\n%s', chrom_dict)
 
     # Save this map to a file using joblib.
     chrom_map_path = os.path.join(output_directory, 'chrom_map.pkl')
@@ -525,88 +555,111 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
     joblib.dump(chrom_dict, chrom_map_path)
     logging.info('Saved the chromosome map to %s', chrom_map_path)
 
+    # Map the chromosome names to integer values.
+    data['chrom'] = data['chrom'].map(chrom_dict)
+    logging.info('Mapped chromosome names to integer values:\n%s', data.head())
+
+    logging.info('Number of NaN values in the combined dataframe after mapping chromosomes: %d', data.isna().sum().sum())
+
     # Get the features and labels.
-    features = data[["chrom", "start", "end", "label", "fragile_site", "conserved_region", "simple_repeat", "telomere", "centromere", "segdup"]]
+    # features = data[["chrom", "start", "end", "label", "fragile_site",
+    # "conserved_region", "simple_repeat", "telomere", "centromere", "segdup"]]
+    # Get all columns except the label.
+    features = data.drop(columns=["label"])
+    logging.info('Features columns:\n%s', features.columns)
+
+    # Print number of NaN values in the features dataframe.
+    logging.info('Number of NaN values in the features dataframe: %d', features.isna().sum().sum())
+
     labels = data["label"]
 
-    # Train the model.
-    logging.info('Training the model.')
-    model = LogisticRegression()
-    model.fit(features, labels)
+    # Train different models.
+    models = {
+        "Logistic Regression": LogisticRegression(),
+        "Random Forest": RandomForestClassifier(n_estimators=100, random_state=42),
+        "XGBoost": XGBClassifier(use_label_encoder=False, eval_metric='logloss'),
+        "SVC": SVC(kernel='rbf', class_weight='balanced', probability=True)
+    }
+    for model_name, model in models.items():
+        logging.info('Training the %s model.', model_name)
+        # logging.info('Training the model.')
+        # # model = LogisticRegression()
+        # model = RandomForestClassifier(n_estimators=100, random_state=42)
+        model.fit(features, labels)
 
-    # Get predicted probabilities.
-    logging.info('Getting predicted probabilities.')
-    y_pred = model.predict(features)
-    y_prob = model.predict_proba(features)[:, 1]
+        # Get predicted probabilities.
+        logging.info('Getting predicted probabilities.')
+        y_pred = model.predict(features)
+        y_prob = model.predict_proba(features)[:, 1]
 
-    # Get the ROC curve.
-    fpr, tpr, thresholds = roc_curve(labels, y_prob)
-    roc_auc = auc(fpr, tpr)
+        # Get the ROC curve.
+        fpr, tpr, thresholds = roc_curve(labels, y_prob)
+        roc_auc = auc(fpr, tpr)
 
-    # Plot the ROC curve.
-    plt.figure()
-    plt.plot(fpr, tpr, color='darkorange', lw=2, label='ROC curve (area = %0.2f)' % roc_auc)
-    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
-    plt.xlim([0.0, 1.0])
-    plt.ylim([0.0, 1.05])
-    plt.xlabel('False Positive Rate')
-    plt.ylabel('True Positive Rate')
-    plt.title('Receiver Operating Characteristic')
-    plt.legend(loc='lower right')
-    # Save the plot to the output directory.
-    roc_plot_path = os.path.join(output_directory, 'roc_curve.png')
-    plt.savefig(roc_plot_path)
-    plt.close()
-    logging.info('Saved the ROC curve to %s', roc_plot_path)
+        # Plot the ROC curve.
+        plt.figure()
+        plt.plot(fpr, tpr, color='darkorange', lw=2, label='ROC curve (area = %0.2f)' % roc_auc)
+        plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+        plt.xlim([0.0, 1.0])
+        plt.ylim([0.0, 1.05])
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title('Receiver Operating Characteristic')
+        plt.legend(loc='lower right')
+        # Save the plot to the output directory.
+        roc_plot_path = os.path.join(output_directory, model_name + '_roc_curve.png')
+        plt.savefig(roc_plot_path)
+        plt.close()
+        logging.info('Saved the ROC curve to %s', roc_plot_path)
 
-    # Get the precision-recall curve.
-    precision, recall, thresholds = precision_recall_curve(labels, y_prob)
-    pr_auc = auc(recall, precision)
+        # Get the precision-recall curve.
+        precision, recall, thresholds = precision_recall_curve(labels, y_prob)
+        pr_auc = auc(recall, precision)
 
-    # Plot the precision-recall curve.
-    plt.figure()
-    plt.plot(recall, precision, color='blue', lw=2, label='Precision-Recall curve (area = %0.2f)' % pr_auc)
-    plt.xlabel('Recall')
-    plt.ylabel('Precision')
-    plt.title('Precision-Recall Curve')
-    plt.legend(loc='lower left')
-    # Save the plot to the output directory.
-    pr_plot_path = os.path.join(output_directory, 'precision_recall_curve.png')
-    plt.savefig(pr_plot_path)
-    plt.close()
-    logging.info('Saved the Precision-Recall curve to %s', pr_plot_path)
+        # Plot the precision-recall curve.
+        plt.figure()
+        plt.plot(recall, precision, color='blue', lw=2, label='Precision-Recall curve (area = %0.2f)' % pr_auc)
+        plt.xlabel('Recall')
+        plt.ylabel('Precision')
+        plt.title('Precision-Recall Curve')
+        plt.legend(loc='lower left')
+        # Save the plot to the output directory.
+        pr_plot_path = os.path.join(output_directory, model_name + '_pr_curve.png')
+        plt.savefig(pr_plot_path)
+        plt.close()
+        logging.info('Saved the Precision-Recall curve to %s', pr_plot_path)
 
-    # Get the confusion matrix.
-    cm = confusion_matrix(labels, y_pred)
-    logging.info('Confusion matrix:\n%s', cm)
+        # Get the confusion matrix.
+        cm = confusion_matrix(labels, y_pred)
+        logging.info('Confusion matrix:\n%s', cm)
 
-    # Plot the confusion matrix using seaborn.
-    plt.figure()
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
-    plt.xlabel('Predicted')
-    plt.ylabel('True')
-    plt.title('Confusion Matrix')
-    # Save the plot to the output directory.
-    cm_plot_path = os.path.join(output_directory, 'confusion_matrix.png')
-    plt.savefig(cm_plot_path)
-    plt.close()
-    logging.info('Saved the confusion matrix to %s', cm_plot_path)
+        # Plot the confusion matrix using seaborn.
+        plt.figure()
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+        plt.xlabel('Predicted')
+        plt.ylabel('True')
+        plt.title('Confusion Matrix')
+        # Save the plot to the output directory.
+        cm_plot_path = os.path.join(output_directory, model_name + '_confusion_matrix.png')
+        plt.savefig(cm_plot_path)
+        plt.close()
+        logging.info('Saved the confusion matrix to %s', cm_plot_path)
 
-    # Print the classification report.
-    logging.info('Classification report:\n%s', classification_report(labels, y_pred))
+        # Print the classification report.
+        logging.info('Classification report:\n%s', classification_report(labels, y_pred))
 
-    # Save the report to a file.
-    report_path = os.path.join(output_directory, 'classification_report.txt')
-    with open(report_path, 'w') as f:
-        f.write(classification_report(labels, y_pred))
+        # Save the report to a file.
+        report_path = os.path.join(output_directory, model_name + '_classification_report.txt')
+        with open(report_path, 'w') as f:
+            f.write(classification_report(labels, y_pred))
 
-    logging.info('Saved the classification report to %s', report_path)
+        logging.info('Saved the classification report to %s', report_path)
 
     # Save the model.
-    model_path = os.path.join(output_directory, "anno_model.pkl")
-    logging.info('Saving the model to %s', model_path)
-    joblib.dump(model, model_path)
-    logging.info('Saved the model to %s', model_path)
+    # model_path = os.path.join(output_directory, "anno_model.pkl")
+    # logging.info('Saving the model to %s', model_path)
+    # joblib.dump(model, model_path)
+    # logging.info('Saved the model to %s', model_path)
 
 
 if __name__ == '__main__':
