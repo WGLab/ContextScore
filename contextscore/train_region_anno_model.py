@@ -579,6 +579,11 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
         "XGBoost": XGBClassifier(use_label_encoder=False, eval_metric='logloss'),
         "SVC": SVC(kernel='rbf', class_weight='balanced', probability=True)
     }
+
+    # models = {
+    #     "XGBoost": XGBClassifier(use_label_encoder=False, eval_metric='logloss'),
+    # }
+
     for model_name, model in models.items():
         logging.info('Training the %s model.', model_name)
         # logging.info('Training the model.')
@@ -659,6 +664,14 @@ def run(tp_bed, fp_bed, output_directory, output_directory_annovar, annovar_path
         logging.info('Saving the model to %s', model_path)
         joblib.dump(model, model_path)
         logging.info('Saved the model to %s', model_path)
+
+        # Run cross-validation by splitting the data into 5 folds and training
+        # the model on each fold.
+        logging.info('Running cross-validation.')
+        from sklearn.model_selection import cross_val_score
+        scores = cross_val_score(model, features, labels, cv=5)
+        logging.info('Cross-validation scores: %s', scores)
+        logging.info('Mean cross-validation score: %f', scores.mean())
 
     # Save the model.
     # model_path = os.path.join(output_directory, "anno_model.pkl")

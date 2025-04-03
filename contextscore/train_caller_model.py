@@ -223,6 +223,10 @@ def train(tp_bed, fp_bed, output_directory):
         "SVC": SVC(kernel='rbf', class_weight='balanced', probability=True)
     }
 
+    # models = {
+    #     "XGBoost": XGBClassifier(use_label_encoder=False, eval_metric='logloss'),
+    # }
+
     for model_name, model in models.items():
         logging.info('Training the %s model.', model_name)
         # logging.info('Training the model.')
@@ -303,6 +307,14 @@ def train(tp_bed, fp_bed, output_directory):
         logging.info('Saving the model to %s', model_path)
         joblib.dump(model, model_path)
         logging.info('Saved the model to %s', model_path)
+
+        # Run cross-validation by splitting the data into 5 folds and training
+        # the model on each fold.
+        from sklearn.model_selection import cross_val_score
+        logging.info('Running cross-validation.')
+        scores = cross_val_score(model, features, labels, cv=5)
+        logging.info('Cross-validation scores: %s', scores)
+        logging.info('Mean cross-validation score: %f', scores.mean())
 
 
 # Run the program.
