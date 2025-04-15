@@ -65,9 +65,11 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno):
     # chrom_dict = joblib.load(chrom_dict_path)
 
     # Read in the BED file.
-    bed_df = pd.read_csv(input_bed, sep='\t', header=0, usecols=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+    bed_df = pd.read_csv(input_bed, sep='\t', header=0, usecols=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
                          names=['chrom', 'start', 'end', 'sv_type', 'sv_length', 'genotype', 'read_depth', 'hmm_llh', 'aln_type', 'cluster_size', 'cn_state', 'aln_offset'],
                          dtype={'chrom': str, 'start': np.int32, 'end': np.int32, 'sv_type': str, 'sv_length': np.int32, 'genotype': str, 'read_depth': np.int32, 'hmm_llh': np.float32, 'aln_type': str, 'cluster_size': np.int32, 'cn_state': np.int32, 'aln_offset': np.int32})
+
+    logging.info("[TEST1] columns in the BED file: %s", bed_df.columns)
 
     # # Print the number of NaN values
     # logging.info('Number of NaN values: %d', bed_df.isnull().sum().sum())
@@ -338,7 +340,7 @@ def get_cytoband_is_c_t(chrom_dict, chrom, cytoband):
 
         if 'centromereq' in chrom_dict[chrom] and chrom_dict[chrom]['centromereq'] in cytoband:
             is_centromere = True
-            
+
     except KeyError:
         # Handle the case where chrom_dict[chrom] is not defined.
         logging.warning('chrom_dict[%s] is not defined.', chrom)

@@ -501,49 +501,65 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno):
     # SV Feature Extraction
     # ---------------------------------------------------------------
 
+
     # Extract the features from the VCF files.
-    # tp_data = extract_features(tp_bed)
-    # fp_data = extract_features(fp_bed)
     tp_anno_outdir = os.path.join(outdiranno, "tp_anno")
     tp_data = extract_features(tp_bed, annovar_path, db_path, tp_anno_outdir)
     fp_anno_outdir = os.path.join(outdiranno, "fp_anno")
     fp_data = extract_features(fp_bed, annovar_path, db_path, fp_anno_outdir)
 
-    # ---------------------------------------------------------------
-    # Annotate the features
-    # ---------------------------------------------------------------
+    # Drop the aln_type columns from the data.
+    # logging.info('Dropping the aln_type column from the data.')
+    # tp_data.drop(columns=['aln_type'], inplace=True, errors='ignore')
+    # fp_data.drop(columns=['aln_type'], inplace=True, errors='ignore')
 
-    # Add annotations to the features.
-    # tp_anno_outdir = os.path.join(outdiranno, "tp_anno")
-    # add_annotations(tp_data, tp_bed, annovar_path, db_path, tp_anno_outdir)
-    # fp_anno_outdir = os.path.join(outdiranno, "fp_anno")
-    # add_annotations(fp_data, fp_bed, annovar_path, db_path, fp_anno_outdir)
+    # Drop the genotype column from the data.
+    logging.info('Dropping the genotype column from the data.')
+    tp_data.drop(columns=['genotype'], inplace=True, errors='ignore')
+    fp_data.drop(columns=['genotype'], inplace=True, errors='ignore')
 
-    # ---------------------------------------------------------------
-    # Feature preparation
-    # ---------------------------------------------------------------
+    # Drop the aln_type column from the data.
+    # logging.info('Dropping the aln_type column from the data.')
+    # tp_data.drop(columns=['aln_type'], inplace=True, errors='ignore')
+    # fp_data.drop(columns=['aln_type'], inplace=True, errors='ignore')
 
-    # # Finally map chromosome names to numbers.
-    # # Load a dictionary mapping chromosome names to numbers.
-    # chrom_dict_path="/mnt/isilon/wang_lab/perdomoj/projects/ContextScore/Train/Model/chrom_map.pkl"
-    # chrom_dict = joblib.load(chrom_dict_path)
+    # Drop the cn_state column from the data.
+    logging.info('Dropping the cn_state column from the data.')
+    tp_data.drop(columns=['cn_state'], inplace=True, errors='ignore')
+    fp_data.drop(columns=['cn_state'], inplace=True, errors='ignore')
 
-    # # Print the number of NaN values
-    # logging.info('Number of NaN values: %d', tp_data.isnull().sum().sum())
-
-    # # Map the chromosome names to numbers.
-    # tp_data['chrom'] = tp_data['chrom'].map(chrom_dict)
-    # fp_data['chrom'] = fp_data['chrom'].map(chrom_dict)
-
-    # # Actually drop the chrom, start, end columns.
-    # tp_data.drop(columns=['chrom', 'start', 'end'], inplace=True)
-    # fp_data.drop(columns=['chrom', 'start', 'end'], inplace=True)
-
-    # logging.info('[TEST] Dropped the chrom, start, end columns. Final columns (TP): %s', tp_data.columns)
-    # logging.info('[TEST] Dropped the chrom, start, end columns. Final columns (FP): %s', fp_data.columns)
-
-    # Print the number of NaN values
-    # logging.info('Number of NaN values after chr mapping: %d', tp_data.isnull().sum().sum())
+    # Analyze feature correlations in the collected data.
+    logging.info('Analyzing feature correlations in the collected data.')
+    corr_matrix = tp_data.corr()
+    plt.figure(figsize=(12, 10))
+    sns.heatmap(corr_matrix, annot=True, fmt=".2f", cmap='coolwarm', square=True, cbar_kws={"shrink": .8})
+    plt.title('Feature Correlation Matrix (True Positives)')
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_directory, 'feature_correlation_tp.png'))
+    plt.close()
+    corr_matrix = fp_data.corr()
+    plt.figure(figsize=(12, 10))
+    sns.heatmap(corr_matrix, annot=True, fmt=".2f", cmap='coolwarm', square=True, cbar_kws={"shrink": .8})
+    plt.title('Feature Correlation Matrix (False Positives)')
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_directory, 'feature_correlation_fp.png'))
+    plt.close()
+    logging.info('Feature correlation analysis completed. TP saved to %s and FP saved to %s',
+                 os.path.join(output_directory, 'feature_correlation_tp.png'),
+                 os.path.join(output_directory, 'feature_correlation_fp.png'))
+    
+    # Analyze feature correlations in the combined data.
+    logging.info('Analyzing feature correlations in the combined data.')
+    combined_data = pd.concat([tp_data, fp_data])
+    corr_matrix_combined = combined_data.corr()
+    plt.figure(figsize=(12, 10))
+    sns.heatmap(corr_matrix_combined, annot=True, fmt=".2f", cmap='coolwarm', square=True, cbar_kws={"shrink": .8})
+    plt.title('Feature Correlation Matrix (Combined Data)')
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_directory, 'feature_correlation_combined.png'))
+    plt.close()
+    logging.info('Feature correlation analysis completed for combined data. Saved to %s',
+                 os.path.join(output_directory, 'feature_correlation_combined.png'))
 
     # Add the labels.
     tp_data['label'] = 1

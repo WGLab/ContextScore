@@ -165,6 +165,18 @@ def score(model, input_vcf, output_vcf):
     plt.savefig(os.path.join(output_dir, 'probabilities.png'))
     logging.info('Saved the plot of the probabilities to %s.', os.path.join(output_dir, 'probabilities.png'))
 
+    # Filter the VCF
+    prob_threshold = 0.1
+    filtered_indices = np.where(y_pred[:, 1] >= prob_threshold)[0]
+    logging.info('Number of variants with probability >= %.2f: %d', prob_threshold, len(filtered_indices))
+
+    filtered_df = feature_df.iloc[filtered_indices]
+    logging.info('Filtered features:\n%s', filtered_df.head())
+
+    # Save the filtered features to the output VCF file
+
+    # logging.info('Filtered indices:\n%s', filtered_indices)
+
     # Save the predictions to the output VCF file
     # vcf_df = pd.read_csv(input_vcf, sep='\t', comment='#', header=None,
 
