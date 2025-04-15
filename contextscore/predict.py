@@ -58,21 +58,44 @@ def score(model, input_vcf, output_vcf):
 
 if __name__ == '__main__':
 
-    # Model file
-    model = sys.argv[1]
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--input', type=str, required=True,
+                        help='Path to the input VCF file.')
+    parser.add_argument('--output', type=str, required=True,
+                        help='Path to the output VCF file.')
+    parser.add_argument('--model', type=str, required=True,
+                        help='Path to the model file.')
+    args = parser.parse_args()
+    input_vcf = args.input
+    output_vcf = args.output
+    model = args.model
 
-    # Input VCF file to score
-    input_vcf = sys.argv[2]
+    # Set up logging
+    logging.basicConfig(level=logging.INFO,
+                        format='%(asctime)s - %(levelname)s - %(message)s')
+    logging.info('Starting the scoring process...')
+    logging.info('Input VCF file: %s', input_vcf)
+    logging.info('Output VCF file: %s', output_vcf)
+    logging.info('Model file: %s', model)
 
-    # Output VCF file
-    output_vcf = sys.argv[3]
+    # Check if the input VCF file exists
+    if not os.path.isfile(input_vcf):
+        logging.error('Input VCF file does not exist: %s', input_vcf)
+        sys.exit(1)
 
-    # Set up the logger
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s %(levelname)s: %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S')
-    
-    # Score the structural variants
+    # Check if the model file exists
+    if not os.path.isfile(model):
+        logging.error('Model file does not exist: %s', model)
+        sys.exit(1)
+
+    # Check if the output directory exists, if not create it
+    output_dir = os.path.dirname(output_vcf)
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        logging.info('Created output directory: %s', output_dir)
+
+    # Run the scoring function
     score(model, input_vcf, output_vcf)
+    logging.info('Scoring process completed.')
     
