@@ -65,11 +65,15 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno):
     # chrom_dict = joblib.load(chrom_dict_path)
 
     # Read in the BED file.
-    bed_df = pd.read_csv(input_bed, sep='\t', header=0, usecols=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
-                         names=['chrom', 'start', 'end', 'sv_type', 'sv_length', 'genotype', 'read_depth', 'hmm_llh', 'aln_type', 'cluster_size', 'cn_state', 'aln_offset'],
-                         dtype={'chrom': str, 'start': np.int32, 'end': np.int32, 'sv_type': str, 'sv_length': np.int32, 'genotype': str, 'read_depth': np.int32, 'hmm_llh': np.float32, 'aln_type': str, 'cluster_size': np.int32, 'cn_state': np.int32, 'aln_offset': np.int32})
+    bed_df = pd.read_csv(input_bed, sep='\t', header=0, usecols=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+                         names=['chrom', 'start', 'end', 'sv_type', 'sv_length', 'genotype', 'read_depth', 'hmm_llh', 'aln_type', 'cluster_size', 'cn_state', 'aln_offset', 'id'],
+                         dtype={'chrom': str, 'start': np.int32, 'end': np.int32, 'sv_type': str, 'sv_length': np.int32, 'genotype': str, 'read_depth': np.int32, 'hmm_llh': np.float32, 'aln_type': str, 'cluster_size': np.int32, 'cn_state': np.int32, 'aln_offset': np.int32, 'id': np.int32})
 
     logging.info("[TEST1] columns in the BED file: %s", bed_df.columns)
+
+    # Drop the genotype column and cn_state columns (due to redundancy).
+    bed_df.drop(columns=['genotype', 'cn_state'], inplace=True)
+    logging.info('[TEST] Dropped the genotype and cn_state columns. Current columns: %s', bed_df.columns)
 
     # # Print the number of NaN values
     # logging.info('Number of NaN values: %d', bed_df.isnull().sum().sum())
@@ -121,18 +125,15 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno):
 
     # Create a map of genotypes to numbers.
     # Genotypes are: "0/0", "0/1", "1/1", "./."
-    genotype_map = {
-        '0/0': 0,
-        '0/1': 1,
-        '1/1': 2,
-        './.': 3
-    }
+    # genotype_map = {
+    #     '0/0': 0,
+    #     '0/1': 1,
+    #     '1/1': 2,
+    #     './.': 3
+    # }
 
     # Map the genotypes to numbers.
-    bed_df['genotype'] = bed_df['genotype'].map(genotype_map)
-
-    # Print the number of NaN values
-    logging.info('Number of NaN values after genotype mapping: %d', bed_df.isnull().sum().sum())
+    # bed_df['genotype'] = bed_df['genotype'].map(genotype_map)
 
     # Check if any features are missing.
     if bed_df.isnull().values.any():
@@ -205,7 +206,7 @@ def run_bedtools_intersect(input_bed, table_bed):
             sep='\t',
             header=None,
             names=["chrom", "start", "end", "chr_anno", "start_anno", "end_anno", "name"],
-            usecols=[0, 1, 2, 12, 13, 14, 15], #10, 11, 12, 13],
+            usecols=[0, 1, 2, 13, 14, 15, 16],#12, 13, 14, 15], #10, 11, 12, 13],
             dtype={'chrom': str, 'start': np.int32, 'end': np.int32, 'chr_anno': str, 'start_anno': np.int32, 'end_anno': np.int32, 'name': str}
         )
 

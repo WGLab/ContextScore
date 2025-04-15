@@ -41,12 +41,15 @@ def create_bed(input_vcf, output_bed):
     """
     # Read the VCF file
     # vcf_df = pd.read_csv(input_vcf, sep='\t', comment='#', header=None, 
-    #                      names=['CHROM', 'POS', 'ID', 'REF', 'ALT', 'QUAL', 'FILTER',
+    #                      names=['CHROM', 'POS', 'id', 'REF', 'ALT', 'QUAL', 'FILTER',
     #                             'INFO', 'FORMAT', 'SAMPLE'])
     logging.info('Reading VCF file: %s', input_vcf)
     vcf_df = pd.read_csv(input_vcf, sep='\t', comment='#', header=None, 
                          names=['CHROM', 'POS', 'INFO', 'FORMAT', 'SAMPLE'], usecols=[0, 1, 7, 8, 9],
                             dtype={'CHROM': str, 'POS': int, 'INFO': str, 'FORMAT': str, 'SAMPLE': str})
+    
+    # Add a column for the ID field with the VCF row number
+    vcf_df['id'] = vcf_df.index + 1  # VCF IDs start from 1
     
     logging.info('VCF file read successfully. Number of records: %d', len(vcf_df))
     logging.info('First few records:\n%s', vcf_df.head())
@@ -104,6 +107,7 @@ def create_bed(input_vcf, output_bed):
     bed_df['CLUSTER'] = info_df['CLUSTER']
     bed_df['CN'] = info_df['CN']
     bed_df['ALNOFFSET'] = info_df['ALNOFFSET']
+    bed_df['id'] = vcf_df['id']
 
     # Print the first few rows of the BED file
     logging.info('First few rows of the BED file:\n%s', bed_df.head())
@@ -147,6 +151,10 @@ def score(model, input_vcf, output_vcf):
     if feature_df.empty:
         logging.error('Feature extraction failed. No features extracted.')
         sys.exit(1)
+
+    # Separate the ID column from the features
+    id_col = feature_df.pop('id')
+    logging.info('Separated ID column from the features.')
 
     # Run the model on the features
     logging.info('Running the model on the features...')
