@@ -27,7 +27,7 @@ def read_cytoband_file(cytoband_file):
     chrom_dict = {}
     for chrom in cytobands['chrom'].unique():
         
-        # Skip chrM
+        # Skip chrM, and other non-standard chromosomes.
         if chrom == 'chrM':
             continue
 
@@ -329,18 +329,34 @@ def get_cytoband_is_c_t(chrom_dict, chrom, cytoband):
     try:
         if 'telomerep' in chrom_dict[chrom] and chrom_dict[chrom]['telomerep'] in cytoband:
             is_telomere = True
+
+        if 'telomereq' in chrom_dict[chrom] and chrom_dict[chrom]['telomereq'] in cytoband:
+            is_telomere = True
+
+        if 'centromerep' in chrom_dict[chrom] and chrom_dict[chrom]['centromerep'] in cytoband:
+            is_centromere = True
+
+        if 'centromereq' in chrom_dict[chrom] and chrom_dict[chrom]['centromereq'] in cytoband:
+            is_centromere = True
+            
+    except KeyError:
+        # Handle the case where chrom_dict[chrom] is not defined.
+        logging.warning('chrom_dict[%s] is not defined.', chrom)
+        logging.warning('Cytoband: %s', cytoband)
+        logging.warning('chrom_dict[%s]: %s', chrom, chrom_dict.get(chrom, 'Not found'))
+
     except TypeError:
         # Handle the case where telomerep is not defined.
         logging.warning('chrom_dict[%s] does not have telomerep defined.', chrom)
         logging.warning('Cytoband: %s', cytoband)
         logging.warning('chrom_dict[%s]: %s', chrom, chrom_dict[chrom])
-        is_telomere = False
-    if 'telomereq' in chrom_dict[chrom] and chrom_dict[chrom]['telomereq'] in cytoband:
-        is_telomere = True
-    if 'centromerep' in chrom_dict[chrom] and chrom_dict[chrom]['centromerep'] in cytoband:
-        is_centromere = True
-    if 'centromereq' in chrom_dict[chrom] and chrom_dict[chrom]['centromereq'] in cytoband:
-        is_centromere = True
+    #     is_telomere = False
+    # if 'telomereq' in chrom_dict[chrom] and chrom_dict[chrom]['telomereq'] in cytoband:
+    #     is_telomere = True
+    # if 'centromerep' in chrom_dict[chrom] and chrom_dict[chrom]['centromerep'] in cytoband:
+    #     is_centromere = True
+    # if 'centromereq' in chrom_dict[chrom] and chrom_dict[chrom]['centromereq'] in cytoband:
+    #     is_centromere = True
     
     return is_telomere, is_centromere
 
