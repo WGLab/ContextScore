@@ -53,6 +53,7 @@ import joblib
 import pandas as pd
 from io import StringIO
 
+from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from xgboost import XGBClassifier
@@ -112,8 +113,8 @@ def extract_features(input_bed):
 
     # Read in the BED file.
     bed_df = pd.read_csv(input_bed, sep='\t', header=0, usecols=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-                         names=['chrom', 'start', 'end', 'sv_type', 'sv_length', 'genotype', 'read_depth', 'hmm_llh', 'aln_type', 'cluster_size'],
-                         dtype={'chrom': str, 'start': np.int32, 'end': np.int32, 'sv_type': str, 'sv_length': np.int32, 'genotype': str, 'read_depth': np.int32, 'hmm_llh': np.float32, 'aln_type': str, 'cluster_size': np.int32})
+                         names=['chrom', 'start', 'end', 'sv_type', 'sv_length', 'genotype', 'read_depth', 'hmm_llh', 'aln_type', 'cluster_size', 'cn_state', 'aln_offset'],
+                         dtype={'chrom': str, 'start': np.int32, 'end': np.int32, 'sv_type': str, 'sv_length': np.int32, 'genotype': str, 'read_depth': np.int32, 'hmm_llh': np.float32, 'aln_type': str, 'cluster_size': np.int32, 'cn_state': np.int32, 'aln_offset': np.int32})
 
     # # Print the number of NaN values
     # logging.info('Number of NaN values: %d', bed_df.isnull().sum().sum())
@@ -230,7 +231,7 @@ def run_bedtools_intersect(input_bed, table_bed):
             sep='\t',
             header=None,
             names=["chrom", "start", "end", "chr_anno", "start_anno", "end_anno", "name"],
-            usecols=[0, 1, 2, 10, 11, 12, 13],
+            usecols=[0, 1, 2, 12, 13, 14, 15], #10, 11, 12, 13],
             dtype={'chrom': str, 'start': np.int32, 'end': np.int32, 'chr_anno': str, 'start_anno': np.int32, 'end_anno': np.int32, 'name': str}
         )
 
@@ -251,7 +252,17 @@ def bed_to_annovar_input(bed_file):
     logging.info('Converting the BED file to ANNOVAR input format.')
 
     # Read the BED file using pandas (first line is the header with the column names).
-    df = pd.read_csv(bed_file, sep='\t', header=None, comment='#', names=["CHROM", "POS", "END", "SVTYPE", "SVLEN"], skiprows=1)
+    # df = pd.read_csv(bed_file, sep='\t', header=None, comment='#',
+    # names=["CHROM", "POS", "END", "SVTYPE", "SVLEN"], skiprows=1)
+    # df = pd.read_csv(bed_file, sep='\t', header=0, comment='#',
+    #                  names=["CHROM", "POS", "END", "SVTYPE", "SVLEN"], usecols=[0, 1, 2, 3, 4],
+    #                  dtype={'CHROM': str, 'POS': np.int32, 'END': np.int32,
+    #                  'SVTYPE': str, 'SVLEN': np.int32})
+    df = pd.read_csv(bed_file, sep='\t', usecols=[0, 1, 2],
+                     names=["CHROM", "POS", "END"],
+                     dtype={'CHROM': str, 'POS': np.int32, 'END': np.int32})
+    
+    # Check if the BED file is empty.
     logging.info('Number of rows in the BED file: %d', df.shape[0])
     logging.info('First 5 rows of the BED file:\n%s', df.head())
 
@@ -450,10 +461,6 @@ def add_annotations(data, input_bed, annovar_path, db_path, anno_outdir):
     anno_df['Start'] = anno_df['Start'].astype(np.int32)
     anno_df['End'] = anno_df['End'].astype(np.int32)
 
-    print("[TEST] Data types:")
-    print(data.dtypes[['chrom', 'start', 'end']])
-    print(anno_df.dtypes[['Chr', 'Start', 'End']])
-
     # Merge the ANNOVAR annotations with the data.
     logging.info('Merging the ANNOVAR annotations with the data.')
     data = data.merge(anno_df, left_on=['chrom', 'start', 'end'], right_on=['Chr', 'Start', 'End'], how='left')
@@ -524,6 +531,13 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno):
     tp_data['chrom'] = tp_data['chrom'].map(chrom_dict)
     fp_data['chrom'] = fp_data['chrom'].map(chrom_dict)
 
+    # Actually drop the chrom, start, end columns.
+    tp_data.drop(columns=['chrom', 'start', 'end'], inplace=True)
+    fp_data.drop(columns=['chrom', 'start', 'end'], inplace=True)
+
+    logging.info('[TEST] Dropped the chrom, start, end columns. Final columns (TP): %s', tp_data.columns)
+    logging.info('[TEST] Dropped the chrom, start, end columns. Final columns (FP): %s', fp_data.columns)
+
     # Print the number of NaN values
     logging.info('Number of NaN values after chr mapping: %d', tp_data.isnull().sum().sum())
 
@@ -566,30 +580,60 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno):
     # }
 
     for model_name, model in models.items():
-        logging.info('Training the %s model.', model_name)
-        # logging.info('Training the model.')
-        # # model = LogisticRegression()
-        # model = RandomForestClassifier(n_estimators=100, random_state=42)
-        model.fit(features, labels)
+        # Split the data into training and testing sets.
+        logging.info('Splitting the data into training and testing sets (0.8/0.2).')
+        X_train, X_test, y_train, y_test = train_test_split(features, labels, test_size=0.2, random_state=42)
 
-        # Get predicted probabilities.
-        logging.info('Getting predicted probabilities.')
-        y_pred = model.predict(features)
-        y_prob = model.predict_proba(features)[:, 1]
+        # If SVC, scale the data.
+        if model_name == "SVC":
+            from sklearn.preprocessing import StandardScaler
+            scaler = StandardScaler()
+            X_train = scaler.fit_transform(X_train)
+            X_test = scaler.transform(X_test)
+
+        # Train the model.
+        logging.info('Training the %s model.', model_name)
+        # model.fit(features, labels)
+        model.fit(X_train, y_train)
+
+        # Get predicted probabilities for the training and testing sets.
+        y_train_prob = model.predict_proba(X_train)[:, 1]
+        y_test_prob = model.predict_proba(X_test)[:, 1]
+
+        # Compute the ROC curve and ROC area for the training set.
+        fpr_train, tpr_train, _ = roc_curve(y_train, y_train_prob)
+        roc_auc_train = auc(fpr_train, tpr_train)
+
+        # Compute the ROC curve and ROC area for the testing set.
+        fpr_test, tpr_test, thresholds = roc_curve(y_test, y_test_prob)
+        roc_auc_test = auc(fpr_test, tpr_test)
+
+        # Use Youden's J statistic to find the optimal threshold.
+        j_scores = tpr_test - fpr_test
+        optimal_idx = np.argmax(j_scores)
+        optimal_threshold = thresholds[optimal_idx]
+        logging.info('Optimal threshold (Youden\'s J statistic): %f', optimal_threshold)
+        logging.info('True positive rate (sensitivity): %f', tpr_test[optimal_idx])
+        logging.info('False positive rate (1 - specificity): %f', fpr_test[optimal_idx])
+
+        # Print the ROC AUC scores.
+        logging.info('ROC AUC score for the training set: %f', roc_auc_train)
+        logging.info('ROC AUC score for the testing set: %f', roc_auc_test)
 
         # Get the ROC curve.
-        fpr, tpr, thresholds = roc_curve(labels, y_prob)
-        roc_auc = auc(fpr, tpr)
+        # fpr, tpr, thresholds = roc_curve(labels, y_prob)
+        # roc_auc = auc(fpr, tpr)
 
-        # Plot the ROC curve.
+        # Plot the ROC curve for the training set.
         plt.figure()
-        plt.plot(fpr, tpr, color='darkorange', lw=2, label='ROC curve (area = %0.2f)' % roc_auc)
+        plt.plot(fpr_train, tpr_train, color='blue', lw=2, label='ROC curve (area = %0.2f)' % roc_auc_train)
+        # plt.plot(fpr, tpr, color='darkorange', lw=2, label='ROC curve (area = %0.2f)' % roc_auc)
         plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
         plt.xlim([0.0, 1.0])
         plt.ylim([0.0, 1.05])
         plt.xlabel('False Positive Rate')
         plt.ylabel('True Positive Rate')
-        plt.title('Receiver Operating Characteristic')
+        plt.title('Receiver Operating Characteristic (Training Set)')
         plt.legend(loc='lower right')
         # Save the plot to the output directory.
         roc_plot_path = os.path.join(output_directory, model_name + '_roc_curve.png')
@@ -597,48 +641,133 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno):
         plt.close()
         logging.info('Saved the ROC curve to %s', roc_plot_path)
 
-        # Get the precision-recall curve.
-        precision, recall, thresholds = precision_recall_curve(labels, y_prob)
-        pr_auc = auc(recall, precision)
+        # Plot the ROC curve for the testing set.
+        plt.figure()
+        plt.plot(fpr_test, tpr_test, color='blue', lw=2, label='ROC curve (area = %0.2f)' % roc_auc_test)
+        plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+        plt.xlim([0.0, 1.0])
+        plt.ylim([0.0, 1.05])
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title('Receiver Operating Characteristic (Testing Set)')
+        plt.legend(loc='lower right')
+        # Save the plot to the output directory.
+        roc_plot_path = os.path.join(output_directory, model_name + '_roc_curve_test.png')
+        plt.savefig(roc_plot_path)
+        plt.close()
+        logging.info('Saved the ROC curve to %s', roc_plot_path)
+
+        # Feature importance for Random Forest and XGBoost.
+        if model_name in ["Random Forest", "XGBoost"]:
+            # Get feature importances.
+            importances = model.feature_importances_
+
+            # Sort the feature importances in descending order.
+            indices = np.argsort(importances)[::-1]
+
+            # Print the feature ranking.
+            logging.info('Feature ranking:')
+            for f in range(X_train.shape[1]):
+                logging.info('%d. Feature %d (%f)', f + 1, indices[f], importances[indices[f]])
+
+            # Plot the feature importances.
+            plt.figure()
+            plt.title('Feature Importances')
+            plt.bar(range(X_train.shape[1]), importances[indices], align='center')
+            plt.xticks(range(X_train.shape[1]), indices)
+            plt.xlim([-1, X_train.shape[1]])
+            # Save the plot to the output directory.
+            importance_plot_path = os.path.join(output_directory, model_name + '_feature_importances.png')
+            plt.savefig(importance_plot_path)
+            plt.close()
+            logging.info('Saved the feature importances plot to %s', importance_plot_path)
+
+        # For SVC, get the support vectors.
+        if model_name == "SVC":
+            # Get the support vectors.
+            support_vectors = model.support_vectors_
+
+            # Plot the support vectors.
+            plt.figure()
+            plt.scatter(X_train[:, 0], X_train[:, 1], c='blue', s=30, label='Training data')
+            plt.scatter(support_vectors[:, 0], support_vectors[:, 1], c='red', s=50, label='Support vectors')
+            plt.title('Support Vectors')
+            plt.xlabel('Feature 1')
+            plt.ylabel('Feature 2')
+            plt.legend()
+            # Save the plot to the output directory.
+            sv_plot_path = os.path.join(output_directory, model_name + '_support_vectors.png')
+            plt.savefig(sv_plot_path)
+            plt.close()
+            logging.info('Saved the support vectors plot to %s', sv_plot_path)
+
+        # For logistic regression, get the coefficients.
+        if model_name == "Logistic Regression":
+            # Get the coefficients.
+            coefficients = model.coef_[0]
+
+            # Sort the coefficients in descending order.
+            indices = np.argsort(coefficients)[::-1]
+
+            # Print the feature ranking.
+            logging.info('Feature ranking:')
+            for f in range(X_train.shape[1]):
+                logging.info('%d. Feature %d (%f)', f + 1, indices[f], coefficients[indices[f]])
+
+            # Plot the coefficients.
+            plt.figure()
+            plt.title('Feature Coefficients')
+            plt.bar(range(X_train.shape[1]), coefficients[indices], align='center')
+            plt.xticks(range(X_train.shape[1]), indices)
+            plt.xlim([-1, X_train.shape[1]])
+            # Save the plot to the output directory.
+            coeff_plot_path = os.path.join(output_directory, model_name + '_feature_coefficients.png')
+            plt.savefig(coeff_plot_path)
+            plt.close()
+            logging.info('Saved the feature coefficients plot to %s', coeff_plot_path)
+
+        # Get the precision-recall curve f
+        # precision, recall, thresholds = precision_recall_curve(labels, y_prob)
+        # pr_auc = auc(recall, precision)
 
         # Plot the precision-recall curve.
-        plt.figure()
-        plt.plot(recall, precision, color='blue', lw=2, label='Precision-Recall curve (area = %0.2f)' % pr_auc)
-        plt.xlabel('Recall')
-        plt.ylabel('Precision')
-        plt.title('Precision-Recall Curve')
-        plt.legend(loc='lower left')
-        # Save the plot to the output directory.
-        pr_plot_path = os.path.join(output_directory, model_name + '_pr_curve.png')
-        plt.savefig(pr_plot_path)
-        plt.close()
-        logging.info('Saved the Precision-Recall curve to %s', pr_plot_path)
+        # plt.figure()
+        # plt.plot(recall, precision, color='blue', lw=2, label='Precision-Recall curve (area = %0.2f)' % pr_auc)
+        # plt.xlabel('Recall')
+        # plt.ylabel('Precision')
+        # plt.title('Precision-Recall Curve')
+        # plt.legend(loc='lower left')
+        # # Save the plot to the output directory.
+        # pr_plot_path = os.path.join(output_directory, model_name + '_pr_curve.png')
+        # plt.savefig(pr_plot_path)
+        # plt.close()
+        # logging.info('Saved the Precision-Recall curve to %s', pr_plot_path)
 
-        # Get the confusion matrix.
-        cm = confusion_matrix(labels, y_pred)
-        logging.info('Confusion matrix:\n%s', cm)
+        # # Get the confusion matrix.
+        # cm = confusion_matrix(labels, y_pred)
+        # logging.info('Confusion matrix:\n%s', cm)
 
-        # Plot the confusion matrix using seaborn.
-        plt.figure()
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
-        plt.xlabel('Predicted')
-        plt.ylabel('True')
-        plt.title('Confusion Matrix')
-        # Save the plot to the output directory.
-        cm_plot_path = os.path.join(output_directory, model_name + '_confusion_matrix.png')
-        plt.savefig(cm_plot_path)
-        plt.close()
-        logging.info('Saved the confusion matrix to %s', cm_plot_path)
+        # # Plot the confusion matrix using seaborn.
+        # plt.figure()
+        # sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+        # plt.xlabel('Predicted')
+        # plt.ylabel('True')
+        # plt.title('Confusion Matrix')
+        # # Save the plot to the output directory.
+        # cm_plot_path = os.path.join(output_directory, model_name + '_confusion_matrix.png')
+        # plt.savefig(cm_plot_path)
+        # plt.close()
+        # logging.info('Saved the confusion matrix to %s', cm_plot_path)
 
-        # Print the classification report.
-        logging.info('Classification report:\n%s', classification_report(labels, y_pred))
+        # # Print the classification report.
+        # logging.info('Classification report:\n%s', classification_report(labels, y_pred))
 
-        # Save the report to a file.
-        report_path = os.path.join(output_directory, model_name + '_classification_report.txt')
-        with open(report_path, 'w') as f:
-            f.write(classification_report(labels, y_pred))
+        # # Save the report to a file.
+        # report_path = os.path.join(output_directory, model_name + '_classification_report.txt')
+        # with open(report_path, 'w') as f:
+        #     f.write(classification_report(labels, y_pred))
 
-        logging.info('Saved the classification report to %s', report_path)
+        # logging.info('Saved the classification report to %s', report_path)
 
         # Save the model.
         model_path = os.path.join(output_directory, model_name + '_caller_model.pkl')
@@ -648,11 +777,11 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno):
 
         # Run cross-validation by splitting the data into 5 folds and training
         # the model on each fold.
-        from sklearn.model_selection import cross_val_score
-        logging.info('Running cross-validation.')
-        scores = cross_val_score(model, features, labels, cv=5)
-        logging.info('Cross-validation scores: %s', scores)
-        logging.info('Mean cross-validation score: %f', scores.mean())
+        # from sklearn.model_selection import cross_val_score
+        # logging.info('Running cross-validation.')
+        # scores = cross_val_score(model, features, labels, cv=5, scoring='f1')
+        # logging.info('Cross-validation scores: %s', scores)
+        # logging.info('Mean cross-validation score: %f', scores.mean())
 
 
 # Run the program.
