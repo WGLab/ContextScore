@@ -49,7 +49,10 @@ def create_bed(input_vcf, output_bed):
                             dtype={'CHROM': str, 'POS': int, 'INFO': str, 'FORMAT': str, 'SAMPLE': str})
     
     # Add a column for the ID field with the VCF row number
-    vcf_df['id'] = vcf_df.index + 1  # VCF IDs start from 1
+    vcf_df['id'] = vcf_df.index
+
+    # Print the first 10 IDs
+    logging.info('First 10 IDs in the VCF file:\n%s', vcf_df['id'].head(10))
     
     logging.info('VCF file read successfully. Number of records: %d', len(vcf_df))
     logging.info('First few records:\n%s', vcf_df.head())
@@ -173,13 +176,54 @@ def score(model, input_vcf, output_vcf):
     plt.savefig(os.path.join(output_dir, 'probabilities.png'))
     logging.info('Saved the plot of the probabilities to %s.', os.path.join(output_dir, 'probabilities.png'))
 
-    # Filter the VCF
+    # Filter the VCF, using the id column to get the final indices
     prob_threshold = 0.1
-    filtered_indices = np.where(y_pred[:, 1] >= prob_threshold)[0]
-    logging.info('Number of variants with probability >= %.2f: %d', prob_threshold, len(filtered_indices))
+    filtered_indices = np.where(y_pred[:, 1] < prob_threshold)[0]
+    logging.info('Number of variants passing the probability threshold: %d', len(filtered_indices))
 
-    filtered_df = feature_df.iloc[filtered_indices]
-    logging.info('Filtered features:\n%s', filtered_df.head())
+    # Get the IDs of the filtered variants
+    filtered_ids = id_col.iloc[filtered_indices].values
+    # logging.info('Filtered IDs:\n%s', filtered_ids)
+    # Save the filtered IDs to a text file
+    filtered_ids_file = os.path.join(output_dir, 'filtered_ids.txt')
+    np.savetxt(filtered_ids_file, filtered_ids, fmt='%s')
+    logging.info('Saved the filtered IDs to %s.', filtered_ids_file)
+
+    # Filter the input VCF file based on the filtered indices
+    logging.info('Filtering the input VCF file based on the filtered indices...')
+    filtered_records = set(filtered_ids)
+    current_record = 0
+    with open(input_vcf, 'r') as vcf_in, open(output_vcf, 'w') as vcf_out:
+        for line in vcf_in:
+            if line.startswith('#'):
+                # Write the header lines as they are
+                vcf_out.write(line)
+            else:
+                if current_record not in filtered_records:
+                    # Write the line if the current record is not in the filtered records
+                    vcf_out.write(line)
+                current_record += 1
+
+    logging.info('Filtered the input VCF file and saved it to %s', output_vcf)
+
+    logging.info('Scoring process completed successfully. Number of variants processed: %d', current_record)
+    
+    # # Get the filtered features using the indices
+    # logging.info('Filtering features based on the predicted probabilities...')
+    # if len(filtered_indices) == 0:
+    #     logging.warning('No variants passed the probability threshold. No features to save.')
+    #     return
+    # feature_df['id'] = id_col  # Add the ID column back to the features
+    # logging.info('Filtered features based on the predicted probabilities.')
+    # logging.info('Filtered indices:\n%s', filtered_indices)
+    # # Use the filtered indices to get the filtered features
+    # logging.info('Extracting filtered features from the feature DataFrame...')
+    # if filtered_indices.size == 0:
+    #     logging.warning('No features to filter. No variants passed the probability threshold.')
+    #     return
+
+    # filtered_df = feature_df.iloc[filtered_indices]
+    # logging.info('Filtered features:\n%s', filtered_df.head())
 
     # Save the filtered features to the output VCF file
 

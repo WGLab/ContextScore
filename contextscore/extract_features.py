@@ -54,7 +54,7 @@ def read_cytoband_file(cytoband_file):
 
 # tp_data, tp_bed, annovar_path, db_path, tp_anno_outdir
 
-def extract_features(input_bed, annovar_path, db_path, outdiranno):
+def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion='hg38'):
     """Extract the features from the BED file, columns are in the first row:
     chrom, start, end, sv_type, sv_length, genotype, read_depth, hmm_llh, aln_type, cluster_size
     """
@@ -64,8 +64,26 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno):
     # chrom_dict_path="/mnt/isilon/wang_lab/perdomoj/projects/ContextScore/Train/Model/chrom_map.pkl"
     # chrom_dict = joblib.load(chrom_dict_path)
 
+    # Get the number of columns in the BED file.
+    with open(input_bed, 'r') as f:
+        first_line = f.readline().strip()
+        num_columns = len(first_line.split('\t'))
+        logging.info('Number of columns in the BED file: %d', num_columns)
+    
+    training_format = False
+    if num_columns == 12:  # Standard training format.
+        training_format = True
+        logging.info('Training format detected.')
+    elif num_columns == 13:  # Contains additional 'id' column.
+        logging.info('Prediction format detected.')
+
     # Read in the BED file.
-    bed_df = pd.read_csv(input_bed, sep='\t', header=0, usecols=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+    if training_format:
+        bed_df = pd.read_csv(input_bed, sep='\t', header=0, usecols=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+                         names=['chrom', 'start', 'end', 'sv_type', 'sv_length', 'genotype', 'read_depth', 'hmm_llh', 'aln_type', 'cluster_size', 'cn_state', 'aln_offset'],
+                            dtype={'chrom': str, 'start': np.int32, 'end': np.int32, 'sv_type': str, 'sv_length': np.int32, 'genotype': str, 'read_depth': np.int32, 'hmm_llh': np.float32, 'aln_type': str, 'cluster_size': np.int32, 'cn_state': np.int32, 'aln_offset': np.int32})
+    else:
+        bed_df = pd.read_csv(input_bed, sep='\t', header=0, usecols=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
                          names=['chrom', 'start', 'end', 'sv_type', 'sv_length', 'genotype', 'read_depth', 'hmm_llh', 'aln_type', 'cluster_size', 'cn_state', 'aln_offset', 'id'],
                          dtype={'chrom': str, 'start': np.int32, 'end': np.int32, 'sv_type': str, 'sv_length': np.int32, 'genotype': str, 'read_depth': np.int32, 'hmm_llh': np.float32, 'aln_type': str, 'cluster_size': np.int32, 'cn_state': np.int32, 'aln_offset': np.int32, 'id': np.int32})
 
@@ -147,7 +165,7 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno):
         sys.exit(1)
 
     # Add annotations to the features.
-    add_annotations(bed_df, input_bed, annovar_path, db_path, outdiranno)
+    add_annotations(bed_df, input_bed, annovar_path, db_path, outdiranno, buildversion, training_format)
 
     # Finally map chromosome names to numbers.
     # Load a dictionary mapping chromosome names to numbers.
@@ -169,7 +187,7 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno):
     return bed_df
 
 
-def run_bedtools_intersect(input_bed, table_bed):
+def run_bedtools_intersect(input_bed, table_bed, training_format=False):
     """Run bedtools intersect to annotate the BED file."""
     # Check if bedtools is installed.
     try:
@@ -201,19 +219,29 @@ def run_bedtools_intersect(input_bed, table_bed):
 
         # Parse the output of bedtools intersect into a pandas DataFrame.
         logging.info('Parsing the output of bedtools intersect.')
-        annotated_bed = pd.read_csv(
-            StringIO(result.stdout),
-            sep='\t',
-            header=None,
-            names=["chrom", "start", "end", "chr_anno", "start_anno", "end_anno", "name"],
-            usecols=[0, 1, 2, 13, 14, 15, 16],#12, 13, 14, 15], #10, 11, 12, 13],
-            dtype={'chrom': str, 'start': np.int32, 'end': np.int32, 'chr_anno': str, 'start_anno': np.int32, 'end_anno': np.int32, 'name': str}
-        )
+        if training_format:
+            annotated_bed = pd.read_csv(
+                StringIO(result.stdout),
+                sep='\t',
+                header=None,
+                names=["chrom", "start", "end", "chr_anno", "start_anno", "end_anno", "name"],
+                usecols=[0, 1, 2, 12, 13, 14, 15],
+                dtype={'chrom': str, 'start': np.int32, 'end': np.int32, 'chr_anno': str, 'start_anno': np.int32, 'end_anno': np.int32, 'name': str}
+            )
+        else:
+            annotated_bed = pd.read_csv(
+                StringIO(result.stdout),
+                sep='\t',
+                header=None,
+                names=["chrom", "start", "end", "chr_anno", "start_anno", "end_anno", "name"],
+                usecols=[0, 1, 2, 13, 14, 15, 16],#12, 13, 14, 15], #10, 11, 12, 13],
+                dtype={'chrom': str, 'start': np.int32, 'end': np.int32, 'chr_anno': str, 'start_anno': np.int32, 'end_anno': np.int32, 'name': str}
+            )
 
         # Print the first few rows of the annotated BED file.
         logging.info('Annotated BED file:\n%s', annotated_bed.head())
 
-        return annotated_bed
+        return annotated_bed        
 
     except subprocess.CalledProcessError as e:
         logging.error('Error annotating the BED file: %s', e)
@@ -269,12 +297,12 @@ def bed_to_annovar_input(bed_file):
     return output_file
 
 
-def download_annovar_db(annovar_path, db_path, db_name):
+def download_annovar_db(annovar_path, db_path, db_name, buildversion='hg38'):
     """Download the ANNOVAR database if it does not exist."""
-    logging.info('Downloading the database:' + db_name)
+    logging.info('Downloading the database:' + db_name + ' for build version: ' + buildversion)
     cmd = [
         f"{annovar_path}/annotate_variation.pl",
-        "-buildver", "hg38",
+        "-buildver", buildversion,
         "-downdb", db_name,
         db_path
     ]
@@ -291,7 +319,7 @@ def download_annovar_db(annovar_path, db_path, db_name):
     logging.info('Downloaded the database %s successfully.', db_name)
 
 
-def annotate(annovar_input, annovar_path, db_path, output_dir):
+def annotate(annovar_input, annovar_path, db_path, output_dir, buildversion='hg38'):
     """Annotate regions."""
     logging.info('Annotating regions using ANNOVAR.')
 
@@ -301,7 +329,7 @@ def annotate(annovar_input, annovar_path, db_path, output_dir):
         f"{annovar_path}/table_annovar.pl",
         annovar_input,
         db_path,
-        "--buildver hg38",
+        "--buildver " + buildversion,
         "--out", annotations_dir,
         "--remove",
         "--protocol genomicSuperDups,cytoBand",
@@ -364,17 +392,25 @@ def get_cytoband_is_c_t(chrom_dict, chrom, cytoband):
     return is_telomere, is_centromere
 
 
-def add_annotations(data, input_bed, annovar_path, db_path, anno_outdir):
+def add_annotations(data, input_bed, annovar_path, db_path, anno_outdir, buildversion='hg38', training_format=False):
     """Add annotations to the features."""
     logging.info('Adding annotations to the features.')
 
     # ---------------------------------------------------------------
     # Annotate the fragile sites using a BED file from HumCFS (GRCh38/hg38).
     # https://webs.iiitd.edu.in/raghava/humcfs/download.html
-    # ANNOVAR instructions are here: https://annovar.openbioinformatics.org/en/latest/user-guide/region/
-    fragile_sites_bed="/mnt/isilon/wang_lab/perdomoj/projects/ContextScore/Train/FragileSites/FragileSites_merged.bed"
+    # ANNOVAR instructions are here:
+    # https://annovar.openbioinformatics.org/en/latest/user-guide/region/
+    if buildversion == 'hg38':
+        fragile_sites_bed="/mnt/isilon/wang_lab/perdomoj/projects/ContextScore/Train/FragileSites/FragileSites_merged.bed"
+    elif buildversion == 'hg19':
+        fragile_sites_bed="/mnt/isilon/wang_lab/perdomoj/projects/ContextScore/Train/FragileSites/FragileSites_hg19.bed"
+    else:
+        logging.error('Unsupported build version: %s. Please use hg38 or hg19.', buildversion)
+        sys.exit(1)
+
     logging.info('Annotating the fragile sites using the BED file (GRCh38): %s', fragile_sites_bed)
-    fragile_sites_df = run_bedtools_intersect(input_bed, fragile_sites_bed)
+    fragile_sites_df = run_bedtools_intersect(input_bed, fragile_sites_bed, training_format)
 
     # Merge the fragile sites annotations with the true positive data.
     data['fragile_site'] = data.merge(fragile_sites_df, on=['chrom', 'start', 'end'], how='left')['chr_anno'].notna()
@@ -385,9 +421,15 @@ def add_annotations(data, input_bed, annovar_path, db_path, anno_outdir):
     # ---------------------------------------------------------------
     # Annotate conserved regions using a UCSC Table Browser BED file for
     # phastCons100way (GRCh38/hg38).
-    phastCons_bed = "/mnt/isilon/wang_lab/perdomoj/data/UCSC_Tables/phastCons100way_hg38.bed"
+    if buildversion == 'hg38':
+        phastCons_bed = "/mnt/isilon/wang_lab/perdomoj/data/UCSC_Tables/phastCons100way_hg38.bed"
+    elif buildversion == 'hg19':
+        phastCons_bed = "/mnt/isilon/wang_lab/perdomoj/data/UCSC_Tables/phastCons100way_hg19.bed"
+    else:
+        logging.error('Unsupported build version: %s. Please use hg38 or hg19.', buildversion)
+        sys.exit(1)
     logging.info('Annotating conserved regions using the BED file (GRCh38): %s', phastCons_bed)
-    phastCons_df = run_bedtools_intersect(input_bed, phastCons_bed)
+    phastCons_df = run_bedtools_intersect(input_bed, phastCons_bed, training_format)
 
     # Merge the phastCons annotations with the true positive data.
     data['phastCons'] = data.merge(phastCons_df, on=['chrom', 'start', 'end'], how='left')['chr_anno'].notna()
@@ -398,9 +440,15 @@ def add_annotations(data, input_bed, annovar_path, db_path, anno_outdir):
     # ---------------------------------------------------------------
     # Annotate simple repeats using a UCSC Table Browser BED file for
     # simpleRepeat (GRCh38/hg38).
-    simpleRepeat_bed = "/mnt/isilon/wang_lab/perdomoj/data/UCSC_Tables/simple_repeats_hg38.bed"
+    if buildversion == 'hg38':
+        simpleRepeat_bed = "/mnt/isilon/wang_lab/perdomoj/data/UCSC_Tables/simple_repeats_hg38.bed"
+    elif buildversion == 'hg19':
+        simpleRepeat_bed = "/mnt/isilon/wang_lab/perdomoj/data/UCSC_Tables/simple_repeats_hg19.bed"
+    else:
+        logging.error('Unsupported build version: %s. Please use hg38 or hg19.', buildversion)
+        sys.exit(1)
     logging.info('Annotating simple repeats using the BED file (GRCh38): %s', simpleRepeat_bed)
-    simpleRepeat_df = run_bedtools_intersect(input_bed, simpleRepeat_bed)
+    simpleRepeat_df = run_bedtools_intersect(input_bed, simpleRepeat_bed, training_format)
 
     # Merge the simpleRepeat annotations with the true positive data.
     data['simpleRepeat'] = data.merge(simpleRepeat_df, on=['chrom', 'start', 'end'], how='left')['chr_anno'].notna()
@@ -412,10 +460,10 @@ def add_annotations(data, input_bed, annovar_path, db_path, anno_outdir):
     # Annotate the SVs using ANNOVAR.
     
     # Download the segmental duplication database
-    download_annovar_db(annovar_path, db_path, "genomicSuperDups")
+    download_annovar_db(annovar_path, db_path, "genomicSuperDups", buildversion)
 
     # Download the cytoband database
-    download_annovar_db(annovar_path, db_path, "cytoBand")
+    download_annovar_db(annovar_path, db_path, "cytoBand", buildversion)
 
     # Set up a dictionary for each chromosome, mapping the cytoband to the
     # centromere and telomere regions.
@@ -429,9 +477,10 @@ def add_annotations(data, input_bed, annovar_path, db_path, anno_outdir):
     if not os.path.exists(anno_outdir):
         os.makedirs(anno_outdir)
 
-    annotate(annovar_file, annovar_path, db_path, anno_outdir)
+    annotate(annovar_file, annovar_path, db_path, anno_outdir, buildversion)
 
-    anno_file = os.path.join(anno_outdir, 'regions.hg38_multianno.txt')
+    # anno_file = os.path.join(anno_outdir, 'regions.hg38_multianno.txt')
+    anno_file = os.path.join(anno_outdir, 'regions.{}_multianno.txt'.format(buildversion))
     if not os.path.exists(anno_file):
         logging.error('ANNOVAR annotation file does not exist: %s', anno_file)
         sys.exit(1)
