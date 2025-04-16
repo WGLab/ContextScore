@@ -173,6 +173,22 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
     logging.info('Balancing the dataset by undersampling the true positives (count = %d) to match the false positives (count = %d)', tp_data.shape[0], fp_data.shape[0])
     tp_data = tp_data.sample(fp_data.shape[0], random_state=42)
 
+    # Plot the differences in correlation between true positives and false
+    # positives.
+    # diff_corr = tp_data.corr() - fp_data.corr()
+    # plt.figure(figsize=(12, 10))
+    # sns.heatmap(diff_corr, annot=True, fmt=".2f", cmap='coolwarm', square=True, cbar_kws={"shrink": .8})
+    # plt.title('Difference in Feature Correlation (True Positives - False Positives)')
+    # plt.tight_layout()
+    # plt.savefig(os.path.join(output_directory, 'feature_correlation_difference.png'))
+    # plt.close()
+    # logging.info('Feature correlation difference analysis completed. Saved to %s',
+    #              os.path.join(output_directory, 'feature_correlation_difference.png'))
+
+    # [TEST] Exit after this step to verify the feature extraction and data
+    # preprocessing.
+    # sys.exit(0)
+
     # Combine the true positive and false positive data.
     data = pd.concat([tp_data, fp_data])
 
@@ -183,7 +199,7 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
     # Train different models.
     models = {
         "Logistic Regression": LogisticRegression(),
-        "Random Forest": RandomForestClassifier(n_estimators=100, random_state=42),
+        "Random_Forest": RandomForestClassifier(n_estimators=100, random_state=42),
         "XGBoost": XGBClassifier(use_label_encoder=False, eval_metric='logloss'),
         "SVC": SVC(kernel='linear', class_weight='balanced', probability=True)
     }
@@ -292,8 +308,8 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
         logging.info('Feature names: %s', feature_names)
         logging.info('Number of features: %d', len(feature_names))
 
-        # Feature importance for Random Forest and XGBoost.
-        if model_name in ["Random Forest", "XGBoost"]:
+        # Feature importance for Random_Forest and XGBoost.
+        if model_name in ["Random_Forest", "XGBoost"]:
             # Get feature importances.
             importances = model.feature_importances_
 
