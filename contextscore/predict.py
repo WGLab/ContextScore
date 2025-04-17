@@ -119,7 +119,7 @@ def create_bed(input_vcf, output_bed):
     bed_df.to_csv(output_bed, sep='\t', header=False, index=False)
     logging.info('Created BED file: %s', output_bed)
 
-def score(model, input_vcf, output_vcf):
+def score(model, input_vcf, output_vcf, buildver='hg38'):
     """Score the structural variants using the binary classification model.
 
     Args:
@@ -147,7 +147,7 @@ def score(model, input_vcf, output_vcf):
         os.makedirs(anno_outdir)
         logging.info('Created output directory: %s', anno_outdir)
 
-    feature_df = extract_features(bed_file, annovar_path, annovar_db_path, anno_outdir)
+    feature_df = extract_features(bed_file, annovar_path, annovar_db_path, anno_outdir, buildver)
     logging.info('Extracted features from the BED file:\n%s', feature_df.head())
 
     # Check if the feature extraction was successful
@@ -177,9 +177,10 @@ def score(model, input_vcf, output_vcf):
     logging.info('Saved the plot of the probabilities to %s.', os.path.join(output_dir, 'probabilities.png'))
 
     # Filter the VCF, using the id column to get the final indices
-    prob_threshold = 0.1
+    # prob_threshold = 0.1
+    prob_threshold = 0.05
     filtered_indices = np.where(y_pred[:, 1] < prob_threshold)[0]
-    logging.info('Number of variants passing the probability threshold: %d', len(filtered_indices))
+    logging.info('Number of variants under the probability threshold: %d', len(filtered_indices))
 
     # Get the IDs of the filtered variants
     filtered_ids = id_col.iloc[filtered_indices].values
@@ -193,6 +194,8 @@ def score(model, input_vcf, output_vcf):
     logging.info('Filtering the input VCF file based on the filtered indices...')
     filtered_records = set(filtered_ids)
     current_record = 0
+    pass_count = 0
+    total_records = 0
     with open(input_vcf, 'r') as vcf_in, open(output_vcf, 'w') as vcf_out:
         for line in vcf_in:
             if line.startswith('#'):
@@ -202,59 +205,13 @@ def score(model, input_vcf, output_vcf):
                 if current_record not in filtered_records:
                     # Write the line if the current record is not in the filtered records
                     vcf_out.write(line)
+                    pass_count += 1
+
+                total_records += 1
                 current_record += 1
 
     logging.info('Filtered the input VCF file and saved it to %s', output_vcf)
-
-    logging.info('Scoring process completed successfully. Number of variants processed: %d', current_record)
-    
-    # # Get the filtered features using the indices
-    # logging.info('Filtering features based on the predicted probabilities...')
-    # if len(filtered_indices) == 0:
-    #     logging.warning('No variants passed the probability threshold. No features to save.')
-    #     return
-    # feature_df['id'] = id_col  # Add the ID column back to the features
-    # logging.info('Filtered features based on the predicted probabilities.')
-    # logging.info('Filtered indices:\n%s', filtered_indices)
-    # # Use the filtered indices to get the filtered features
-    # logging.info('Extracting filtered features from the feature DataFrame...')
-    # if filtered_indices.size == 0:
-    #     logging.warning('No features to filter. No variants passed the probability threshold.')
-    #     return
-
-    # filtered_df = feature_df.iloc[filtered_indices]
-    # logging.info('Filtered features:\n%s', filtered_df.head())
-
-    # Save the filtered features to the output VCF file
-
-    # logging.info('Filtered indices:\n%s', filtered_indices)
-
-    # Save the predictions to the output VCF file
-    # vcf_df = pd.read_csv(input_vcf, sep='\t', comment='#', header=None,
-
-    return
-
-    # Extract the features from the VCF file
-    X = extract_features(input_vcf)
-
-    # Predict the labels and get the probabilities
-    y_pred = clf.predict_proba(X)
-
-    # logging.info('Predicted labels:\n%s', y_pred)
-
-    # Plot a histogram of the probabilities
-    plt.hist(y_pred[:, 1], bins=20)
-    plt.xlabel('Probability')
-    plt.ylabel('Count')
-
-    # # Save the plot to the input VCF file's directory
-    # output_dir = os.path.dirname(output_vcf)
-    # output_filepath = os.path.join(output_dir, 'probabilities.png')
-    # plt.savefig(output_filepath)
-    # logging.info('Saved the plot of the probabilities to %s.', output_filepath)
-
-    # Save the plot to the working directory
-    plt.savefig('output/probabilities.png')
+    logging.info('Scoring process completed successfully. Passed %d out of %d records.', pass_count, total_records)
 
 
 if __name__ == '__main__':
@@ -267,6 +224,8 @@ if __name__ == '__main__':
                         help='Path to the output VCF file.')
     parser.add_argument('--model', type=str, required=True,
                         help='Path to the model file.')
+    parser.add_argument('--buildver', type=str, default='hg38',
+                        help='Genome build version (default: hg38).')
     args = parser.parse_args()
     input_vcf = args.input
     output_vcf = args.output
@@ -296,6 +255,23 @@ if __name__ == '__main__':
         os.makedirs(output_dir)
         logging.info('Created output directory: %s', output_dir)
 
+    # Check if the input VCF file is a valid VCF file
+    if not input_vcf.endswith('.vcf') and not input_vcf.endswith('.vcf.gz'):
+        logging.error('Input file is not a valid VCF file: %s', input_vcf)
+        sys.exit(1)
+    if not output_vcf.endswith('.vcf'):
+        logging.error('Output file must have a .vcf extension: %s', output_vcf)
+        sys.exit(1)
+    if not model.endswith('.pkl'):
+        logging.error('Model file must have a .pkl extension: %s', model)
+        sys.exit(1)
+
+    # Check the reference genome build version
+    buildver = args.buildver
+    if buildver not in ['hg19', 'hg38']:
+        logging.error('Unsupported genome build version: %s. Supported versions are hg19 and hg38.', buildver)
+        sys.exit(1)
+
     # Run the scoring function
-    score(model, input_vcf, output_vcf)
+    score(model, input_vcf, output_vcf, buildver=buildver)
     logging.info('Scoring process completed.')
