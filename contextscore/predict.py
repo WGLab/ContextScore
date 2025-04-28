@@ -16,6 +16,7 @@ import logging
 import numpy as np
 import joblib
 import pandas as pd
+import seaborn as sns
 
 import matplotlib.pyplot as plt
 
@@ -164,17 +165,28 @@ def score(model, input_vcf, output_vcf, buildver='hg38'):
     y_pred = clf.predict_proba(feature_df)
 
     # Plot a histogram of the probabilities
-    plt.hist(y_pred[:, 1], bins=20)
-    plt.xlabel('Probability')
-    plt.ylabel('Count')
-    plt.title('Probability Distribution')
+    # output_dir = os.path.dirname(output_vcf)
+    # plt.hist(y_pred[:, 1], bins=20)
+    # plt.xlabel('Probability')
+    # plt.ylabel('Count')
+    # plt.title('Probability Distribution')
+    # if not os.path.exists(output_dir):
+    #     os.makedirs(output_dir)
+    #     logging.info('Created output directory: %s', output_dir)
+    # # Save the plot to the output directory
+    # plt.savefig(os.path.join(output_dir, 'probabilities.png'))
+    # logging.info('Saved the plot of the probabilities to %s.', os.path.join(output_dir, 'probabilities.png'))
+
+    # Plot a histogram of the probabilities using seaborn since it looks better
     output_dir = os.path.dirname(output_vcf)
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-        logging.info('Created output directory: %s', output_dir)
+    fig, ax = plt.subplots()
+    sns.histplot(y_pred[:, 1], bins=20, ax=ax)
+    ax.set_xlabel('Probability')
+    ax.set_ylabel('Count')
+    ax.set_title('Probability Distribution')
     # Save the plot to the output directory
-    plt.savefig(os.path.join(output_dir, 'probabilities.png'))
-    logging.info('Saved the plot of the probabilities to %s.', os.path.join(output_dir, 'probabilities.png'))
+    plt.savefig(os.path.join(output_dir, 'probabilities_seaborn.png'))
+    logging.info('Saved the plot of the probabilities to %s.', os.path.join(output_dir, 'probabilities_seaborn.png'))
 
     # Filter the VCF, using the id column to get the final indices
     # prob_threshold = 0.1
