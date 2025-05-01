@@ -218,41 +218,6 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
     feature_names = features.columns.tolist()
     logging.info('Feature names: %s', feature_names)
 
-    # The segdup feature seems highly important for the model (too much
-    # correlation with the label). Thus, we will plot the distribution of the
-    # segdup feature for true positives and false positives.
-    logging.info('Plotting the distribution of the segdup feature for true positives.')
-    plt.figure(figsize=(10, 6))
-    # sns.histplot(tp_data['segdup'], color='blue', kde=True, stat='density')
-
-    # Plot only non-zero values.
-    sns.histplot(tp_data[tp_data['segdup'] > 0]['segdup'], color='blue', kde=True, stat='density')
-    plt.xlabel('segdup')
-    plt.ylabel('Density')
-    plt.title('Distribution of segdup Feature (True Positives)')
-    # Save the plot to the output directory.
-    segdup_tp_plot_path = os.path.join(output_directory, 'segdup_distribution_tp.png')
-    plt.savefig(segdup_tp_plot_path)
-    plt.close()
-    logging.info('Saved the segdup distribution plot for true positives to %s', segdup_tp_plot_path)
-
-    logging.info('Plotting the distribution of the segdup feature for false positives.')
-    plt.figure(figsize=(10, 6))
-    # sns.histplot(fp_data['segdup'], color='red', kde=True, stat='density')
-    # Plot only non-zero values.
-    sns.histplot(fp_data[fp_data['segdup'] > 0]['segdup'], color='red', kde=True, stat='density')
-    plt.xlabel('segdup')
-    plt.ylabel('Density')
-    plt.title('Distribution of segdup Feature (False Positives)')
-    # Save the plot to the output directory.
-    segdup_fp_plot_path = os.path.join(output_directory, 'segdup_distribution_fp.png')
-    plt.savefig(segdup_fp_plot_path)
-    plt.close()
-    logging.info('Saved the segdup distribution plot for false positives to %s', segdup_fp_plot_path)
-
-    # [TEST] exit after this step to verify the data preprocessing.
-    sys.exit(0)
-
     for model_name, model in models.items():
         # # Split the data into training and testing sets.
         # logging.info('Splitting the data into training and testing sets (0.8/0.2).')
