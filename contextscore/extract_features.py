@@ -165,7 +165,12 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
         sys.exit(1)
 
     # Add annotations to the features.
-    add_annotations(bed_df, input_bed, annovar_path, db_path, outdiranno, buildversion, training_format)
+    bed_df = add_annotations(bed_df, input_bed, annovar_path, db_path, outdiranno, buildversion, training_format)
+    logging.info('Added ANNOVAR annotations to the features. Updated columns: %s', bed_df.columns)
+
+    # Drop the segdup column (too highly correlated with SVs).
+    bed_df.drop(columns=['segdup'], inplace=True)
+    logging.info('[TEST] Dropped the segdup column. Current columns: %s', bed_df.columns)
 
     # Finally map chromosome names to numbers.
     # Load a dictionary mapping chromosome names to numbers.
@@ -530,5 +535,9 @@ def add_annotations(data, input_bed, annovar_path, db_path, anno_outdir, buildve
     # Drop the unnecessary columns.
     data.drop(columns=['Chr', 'Start', 'End', 'cytoBand', 'genomicSuperDups', 'Ref', 'Alt'], inplace=True)
 
+    logging.info('Dropped the unnecessary columns. Current columns: %s', data.columns)
+
     logging.info('Number of records after adding annotations: %d', data.shape[0])
     logging.info('First 5 rows of the data after adding annotations:\n%s', data.head())
+
+    return data

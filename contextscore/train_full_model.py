@@ -173,6 +173,9 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
     logging.info('Balancing the dataset by undersampling the true positives (count = %d) to match the false positives (count = %d)', tp_data.shape[0], fp_data.shape[0])
     tp_data = tp_data.sample(fp_data.shape[0], random_state=42)
 
+    logging.info('Number of true labels after balancing: %d', tp_data.shape[0])
+    logging.info('Number of false labels after balancing: %d', fp_data.shape[0])
+
     # Plot the differences in correlation between true positives and false
     # positives.
     # diff_corr = tp_data.corr() - fp_data.corr()
@@ -209,12 +212,38 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
         logging.info('Splitting the data into training and testing sets (0.8/0.2).')
         X_train, X_test, y_train, y_test = train_test_split(features, labels, test_size=0.2, random_state=42)
 
+        # Scale the data since some features such as read depth and LRR vary across
+        # different samples and can have different ranges.
+        from sklearn.preprocessing import StandardScaler
+        scaler = StandardScaler()
+        X_train = scaler.fit_transform(X_train)
+        X_test = scaler.transform(X_test)
+        logging.info('Data split and scaled. Training set size: %d, Testing set size: %d',
+                     X_train.shape[0], X_test.shape[0])
+        # Print the number of features.
+        logging.info('Number of features: %d', X_train.shape[1])
+
+        # Print the feature names.
+        feature_names = features.columns.tolist()
+        logging.info('Feature names: %s', feature_names)
+        logging.info('Number of features: %d', len(feature_names))
+
+        # Print the number of true positives and false positives in the training
+        # and testing sets.
+        logging.info('Number of true positives in the training set: %d', np.sum(y_train == 1))
+        logging.info('Number of false positives in the training set: %d', np.sum(y_train == 0))
+        logging.info('Number of true positives in the testing set: %d', np.sum(y_test == 1))
+        logging.info('Number of false positives in the testing set: %d', np.sum(y_test == 0))
+        logging.info('Training set size: %d', X_train.shape[0])
+        logging.info('Testing set size: %d', X_test.shape[0])
+        logging.info('Number of features: %d', X_train.shape[1])
+
         # If SVC, scale the data.
-        if model_name == "SVC":
-            from sklearn.preprocessing import StandardScaler
-            scaler = StandardScaler()
-            X_train = scaler.fit_transform(X_train)
-            X_test = scaler.transform(X_test)
+        # if model_name == "SVC":
+        #     from sklearn.preprocessing import StandardScaler
+        #     scaler = StandardScaler()
+        #     X_train = scaler.fit_transform(X_train)
+        #     X_test = scaler.transform(X_test)
 
         # Train the model.
         logging.info('Training the %s model.', model_name)
@@ -257,6 +286,7 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
         plt.title('Receiver Operating Characteristic (Training Set)')
         plt.legend(loc='lower right')
         # Save the plot to the output directory.
+        model_name = model_name.replace(" ", "_")
         roc_plot_path = os.path.join(output_directory, model_name + '_roc_curve.png')
         plt.savefig(roc_plot_path)
         plt.close()
