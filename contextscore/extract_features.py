@@ -169,8 +169,8 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
     logging.info('Added ANNOVAR annotations to the features. Updated columns: %s', bed_df.columns)
 
     # Drop the segdup column (too highly correlated with SVs).
-    bed_df.drop(columns=['segdup'], inplace=True)
-    logging.info('[TEST] Dropped the segdup column. Current columns: %s', bed_df.columns)
+    # bed_df.drop(columns=['segdup'], inplace=True)
+    # logging.info('[TEST] Dropped the segdup column. Current columns: %s', bed_df.columns)
 
     # Finally map chromosome names to numbers.
     # Load a dictionary mapping chromosome names to numbers.
@@ -510,14 +510,40 @@ def add_annotations(data, input_bed, annovar_path, db_path, anno_outdir, buildve
     logging.info('Merging the ANNOVAR annotations with the data.')
     data = data.merge(anno_df, left_on=['chrom', 'start', 'end'], right_on=['Chr', 'Start', 'End'], how='left')
 
+    # Print the first 20 segdup values.
+    logging.info('First 20 values of the segdup column: %s', data['genomicSuperDups'].head(20))
+
     # Extract segmental duplication scores.
-    def extract_max_score(score_series):
-        """Extract and return the maximum Score= value from a series."""
-        scores = score_series.str.extract(r'Score=([\d\.]+)')[0].dropna().astype(float)
-        return scores.max() if not scores.empty else 0
+    # def extract_max_score(score_series):
+    #     """Extract and return the maximum Score= value from a series."""
+    #     scores = score_series.str.extract(r'Score=([\d\.]+)')[0].dropna().astype(float)
+    #     return scores.max() if not scores.empty else 0
+    
+    # Extract segmental duplication scores.
+    def extract_scores(score_str):
+        """Extract and return the segmental duplication scores from a string."""
+        if pd.isna(score_str) or score_str == '.':
+            return 0
+        # Extract the Score= value from the string.
+        try:
+            score = score_str.split('Score=')[1].split(';')[0]
+        except IndexError:
+            logging.warning('Score= not found in the string: %s', score_str)
+            return 0
+        return float(score) if score else 0
     
     # Extract the maximum score from the segmental duplication annotations.
-    data['segdup'] = extract_max_score(data['genomicSuperDups'])
+    # data['segdup'] = extract_max_score(data['genomicSuperDups'])
+
+    # # Print the first 20 values of the segdup column.
+    # logging.info('First 20 values of the segdup column: %s', data['segdup'].head(20))
+
+    # Extract the segmental duplication scores.
+    # test_scores = data['genomicSuperDups'].apply(extract_scores)
+    data['segdup'] = data['genomicSuperDups'].apply(extract_scores)
+
+    # Print the first 20 values of the test_scores column.
+    logging.info('First 20 values of the updated segdup column: %s', data['segdup'].head(20))
 
     # Extract the cytoband annotations.
     def get_cyto_info(row):

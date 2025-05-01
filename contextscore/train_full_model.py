@@ -207,10 +207,56 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
         "SVC": SVC(kernel='linear', class_weight='balanced', probability=True)
     }
 
+    # Split the data into training and testing sets.
+    logging.info('Splitting the data into training and testing sets (0.8/0.2).')
+    X_train, X_test, y_train, y_test = train_test_split(features, labels, test_size=0.2, random_state=42)
+    logging.info('Data split completed. Training set size: %d, Testing set size: %d',
+                 X_train.shape[0], X_test.shape[0])
+    # Print the number of features.
+    logging.info('Number of features: %d', X_train.shape[1])
+    # Print the feature names.
+    feature_names = features.columns.tolist()
+    logging.info('Feature names: %s', feature_names)
+
+    # The segdup feature seems highly important for the model (too much
+    # correlation with the label). Thus, we will plot the distribution of the
+    # segdup feature for true positives and false positives.
+    logging.info('Plotting the distribution of the segdup feature for true positives.')
+    plt.figure(figsize=(10, 6))
+    # sns.histplot(tp_data['segdup'], color='blue', kde=True, stat='density')
+
+    # Plot only non-zero values.
+    sns.histplot(tp_data[tp_data['segdup'] > 0]['segdup'], color='blue', kde=True, stat='density')
+    plt.xlabel('segdup')
+    plt.ylabel('Density')
+    plt.title('Distribution of segdup Feature (True Positives)')
+    # Save the plot to the output directory.
+    segdup_tp_plot_path = os.path.join(output_directory, 'segdup_distribution_tp.png')
+    plt.savefig(segdup_tp_plot_path)
+    plt.close()
+    logging.info('Saved the segdup distribution plot for true positives to %s', segdup_tp_plot_path)
+
+    logging.info('Plotting the distribution of the segdup feature for false positives.')
+    plt.figure(figsize=(10, 6))
+    # sns.histplot(fp_data['segdup'], color='red', kde=True, stat='density')
+    # Plot only non-zero values.
+    sns.histplot(fp_data[fp_data['segdup'] > 0]['segdup'], color='red', kde=True, stat='density')
+    plt.xlabel('segdup')
+    plt.ylabel('Density')
+    plt.title('Distribution of segdup Feature (False Positives)')
+    # Save the plot to the output directory.
+    segdup_fp_plot_path = os.path.join(output_directory, 'segdup_distribution_fp.png')
+    plt.savefig(segdup_fp_plot_path)
+    plt.close()
+    logging.info('Saved the segdup distribution plot for false positives to %s', segdup_fp_plot_path)
+
+    # [TEST] exit after this step to verify the data preprocessing.
+    sys.exit(0)
+
     for model_name, model in models.items():
-        # Split the data into training and testing sets.
-        logging.info('Splitting the data into training and testing sets (0.8/0.2).')
-        X_train, X_test, y_train, y_test = train_test_split(features, labels, test_size=0.2, random_state=42)
+        # # Split the data into training and testing sets.
+        # logging.info('Splitting the data into training and testing sets (0.8/0.2).')
+        # X_train, X_test, y_train, y_test = train_test_split(features, labels, test_size=0.2, random_state=42)
 
         # Scale the data since some features such as read depth and LRR vary across
         # different samples and can have different ranges.
@@ -364,29 +410,29 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
             logging.info('Saved the feature importances plot to %s', importance_plot_path)
 
         # For SVC, get the coefficients.
-        if model_name == "SVC":
-            # Get the coefficients.
-            # coefficients = model.coef_[0]
+        # if model_name == "SVC":
+        #     # Get the coefficients.
+        #     coefficients = model.coef_[0]
 
-            # Sort the coefficients in descending order.
-            indices = np.argsort(coefficients)[::-1]
+        #     # Sort the coefficients in descending order.
+        #     indices = np.argsort(coefficients)[::-1]
 
-            # Print the feature ranking.
-            logging.info('Feature ranking:')
-            for f in range(X_train.shape[1]):
-                logging.info('%d. Feature %s (%f)', f + 1, feature_names[indices[f]], coefficients[indices[f]])
+        #     # Print the feature ranking.
+        #     logging.info('Feature ranking:')
+        #     for f in range(X_train.shape[1]):
+        #         logging.info('%d. Feature %s (%f)', f + 1, feature_names[indices[f]], coefficients[indices[f]])
 
-            # Plot the coefficients.
-            plt.figure()
-            plt.title('Feature Coefficients')
-            plt.bar(range(X_train.shape[1]), coefficients[indices], align='center')
-            plt.xticks(range(X_train.shape[1]), indices)
-            plt.xlim([-1, X_train.shape[1]])
-            # Save the plot to the output directory.
-            coeff_plot_path = os.path.join(output_directory, model_name + '_feature_coefficients.png')
-            plt.savefig(coeff_plot_path)
-            plt.close()
-            logging.info('Saved the feature coefficients plot to %s', coeff_plot_path)
+        #     # Plot the coefficients.
+        #     plt.figure()
+        #     plt.title('Feature Coefficients')
+        #     plt.bar(range(X_train.shape[1]), coefficients[indices], align='center')
+        #     plt.xticks(range(X_train.shape[1]), indices)
+        #     plt.xlim([-1, X_train.shape[1]])
+        #     # Save the plot to the output directory.
+        #     coeff_plot_path = os.path.join(output_directory, model_name + '_feature_coefficients.png')
+        #     plt.savefig(coeff_plot_path)
+        #     plt.close()
+        #     logging.info('Saved the feature coefficients plot to %s', coeff_plot_path)
 
         # For logistic regression, get the coefficients.
         if model_name == "Logistic Regression":
