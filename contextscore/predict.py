@@ -160,9 +160,14 @@ def score(model, input_vcf, output_vcf, buildver='hg38'):
     id_col = feature_df.pop('id')
     logging.info('Separated ID column from the features.')
 
+    logging.info('Feature DataFrame:\n%s', feature_df.head())
+
     # Run the model on the features
     logging.info('Running the model on the features...')
     y_pred = clf.predict_proba(feature_df)
+
+    # Print the first 10 predictions
+    logging.info('First 10 predictions:\n%s', y_pred[:10])
 
     # Plot a histogram of the probabilities
     # output_dir = os.path.dirname(output_vcf)
@@ -190,9 +195,15 @@ def score(model, input_vcf, output_vcf, buildver='hg38'):
 
     # Filter the VCF, using the id column to get the final indices
     # prob_threshold = 0.1
-    prob_threshold = 0.05
+    # prob_threshold = 0.05
+    # filtered_indices = np.where(y_pred[:, 1] < prob_threshold)[0]
+
+    # Optimal threshold determined by ROC curve using Youden's J statistic
+    # For Random Forest, the optimal threshold is  0.450000
+    prob_threshold = 0.690000
     filtered_indices = np.where(y_pred[:, 1] < prob_threshold)[0]
-    logging.info('Number of variants under the probability threshold: %d', len(filtered_indices))
+
+    logging.info('Number of variants under the probability threshold %.2f: %d', prob_threshold, len(filtered_indices))
 
     # Get the IDs of the filtered variants
     filtered_ids = id_col.iloc[filtered_indices].values

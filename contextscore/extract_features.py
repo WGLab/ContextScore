@@ -89,6 +89,11 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
 
     logging.info("[TEST1] columns in the BED file: %s", bed_df.columns)
 
+    # Normalize the read depth and cluster size columns (sample-dependent).
+    bed_df['read_depth'] = (bed_df['read_depth'] - bed_df['read_depth'].mean()) / bed_df['read_depth'].std()
+    bed_df['cluster_size'] = (bed_df['cluster_size'] - bed_df['cluster_size'].mean()) / bed_df['cluster_size'].std()
+    logging.info('[TEST] Normalized the read depth and cluster size columns. Current columns: %s', bed_df.columns)
+
     # Drop the genotype column and cn_state columns (due to redundancy).
     bed_df.drop(columns=['genotype', 'cn_state'], inplace=True)
     logging.info('[TEST] Dropped the genotype and cn_state columns. Current columns: %s', bed_df.columns)
@@ -376,24 +381,19 @@ def get_cytoband_is_c_t(chrom_dict, chrom, cytoband):
             is_centromere = True
 
     except KeyError:
+        pass
         # Handle the case where chrom_dict[chrom] is not defined.
-        logging.warning('chrom_dict[%s] is not defined.', chrom)
-        logging.warning('Cytoband: %s', cytoband)
-        logging.warning('chrom_dict[%s]: %s', chrom, chrom_dict.get(chrom, 'Not found'))
+        # logging.warning('chrom_dict[%s] is not defined.', chrom)
+        # logging.warning('Cytoband: %s', cytoband)
+        # logging.warning('chrom_dict[%s]: %s', chrom, chrom_dict.get(chrom, 'Not found'))
 
     except TypeError:
+        pass
         # Handle the case where telomerep is not defined.
-        logging.warning('chrom_dict[%s] does not have telomerep defined.', chrom)
-        logging.warning('Cytoband: %s', cytoband)
-        logging.warning('chrom_dict[%s]: %s', chrom, chrom_dict[chrom])
-    #     is_telomere = False
-    # if 'telomereq' in chrom_dict[chrom] and chrom_dict[chrom]['telomereq'] in cytoband:
-    #     is_telomere = True
-    # if 'centromerep' in chrom_dict[chrom] and chrom_dict[chrom]['centromerep'] in cytoband:
-    #     is_centromere = True
-    # if 'centromereq' in chrom_dict[chrom] and chrom_dict[chrom]['centromereq'] in cytoband:
-    #     is_centromere = True
-    
+        # logging.warning('chrom_dict[%s] does not have telomerep defined.', chrom)
+        # logging.warning('Cytoband: %s', cytoband)
+        # logging.warning('chrom_dict[%s]: %s', chrom, chrom_dict[chrom])
+
     return is_telomere, is_centromere
 
 
@@ -511,7 +511,7 @@ def add_annotations(data, input_bed, annovar_path, db_path, anno_outdir, buildve
     data = data.merge(anno_df, left_on=['chrom', 'start', 'end'], right_on=['Chr', 'Start', 'End'], how='left')
 
     # Print the first 20 segdup values.
-    logging.info('First 20 values of the segdup column: %s', data['genomicSuperDups'].head(20))
+    # logging.info('First 20 values of the segdup column: %s', data['genomicSuperDups'].head(20))
 
     # Extract segmental duplication scores.
     # def extract_max_score(score_series):
@@ -543,7 +543,7 @@ def add_annotations(data, input_bed, annovar_path, db_path, anno_outdir, buildve
     data['segdup'] = data['genomicSuperDups'].apply(extract_scores)
 
     # Print the first 20 values of the test_scores column.
-    logging.info('First 20 values of the updated segdup column: %s', data['segdup'].head(20))
+    # logging.info('First 20 values of the updated segdup column: %s', data['segdup'].head(20))
 
     # Extract the cytoband annotations.
     def get_cyto_info(row):
@@ -564,6 +564,6 @@ def add_annotations(data, input_bed, annovar_path, db_path, anno_outdir, buildve
     logging.info('Dropped the unnecessary columns. Current columns: %s', data.columns)
 
     logging.info('Number of records after adding annotations: %d', data.shape[0])
-    logging.info('First 5 rows of the data after adding annotations:\n%s', data.head())
+    # logging.info('First 5 rows of the data after adding annotations:\n%s', data.head())
 
     return data

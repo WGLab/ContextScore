@@ -223,16 +223,19 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
         # logging.info('Splitting the data into training and testing sets (0.8/0.2).')
         # X_train, X_test, y_train, y_test = train_test_split(features, labels, test_size=0.2, random_state=42)
 
-        # Scale the data since some features such as read depth and LRR vary across
+        # Normalize the data since some features such as read depth and LRR vary across
         # different samples and can have different ranges.
-        from sklearn.preprocessing import StandardScaler
-        scaler = StandardScaler()
-        X_train = scaler.fit_transform(X_train)
-        X_test = scaler.transform(X_test)
-        logging.info('Data split and scaled. Training set size: %d, Testing set size: %d',
-                     X_train.shape[0], X_test.shape[0])
+        # from sklearn.preprocessing import StandardScaler
+        # scaler = StandardScaler()
+        # X_train = scaler.fit_transform(X_train)
+        # X_test = scaler.transform(X_test)
+        # logging.info('Data split and scaled. Training set size: %d, Testing set size: %d',
+        #              X_train.shape[0], X_test.shape[0])
+        
         # Print the number of features.
         logging.info('Number of features: %d', X_train.shape[1])
+        logging.info('Training set size: %d', X_train.shape[0])
+        logging.info('Testing set size: %d', X_test.shape[0])
 
         # Print the feature names.
         feature_names = features.columns.tolist()
@@ -297,8 +300,8 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
         plt.title('Receiver Operating Characteristic (Training Set)')
         plt.legend(loc='lower right')
         # Save the plot to the output directory.
-        model_name = model_name.replace(" ", "_")
-        roc_plot_path = os.path.join(output_directory, model_name + '_roc_curve.png')
+        model_name_fp = model_name.replace(" ", "_")
+        roc_plot_path = os.path.join(output_directory, model_name_fp + '_roc_curve.png')
         plt.savefig(roc_plot_path)
         plt.close()
         logging.info('Saved the ROC curve to %s', roc_plot_path)
@@ -326,23 +329,55 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
         logging.info('recall size: %d', len(recall))
         logging.info('thresholds size: %d', len(thresholds_pr))
 
-        # Find the threshold that gives the highest precision (ideally with
-        # recall > 0) or where precision == 1.0 (0 false positives).
-        precision_1_indices = np.where(precision[:-1] == 1.0)[0]
-        if len(precision_1_indices) > 0:
-            # If there are indices where precision == 1.0, use the one with the
-            # highest recall.
-            optimal_index = precision_1_indices[np.argmax(recall[precision_1_indices])]
-            optimal_threshold_pr = thresholds_pr[optimal_index]
-            logging.info('Optimal threshold (highest precision = 1.0): %f with recall %f',
-                        optimal_threshold_pr, recall[optimal_index])
-        else:
-            # If no indices where precision == 1.0, use the one with the highest
-            # precision.
-            optimal_index = np.argmax(precision[:-1])
-            optimal_threshold_pr = thresholds_pr[optimal_index]
-            logging.info('Optimal threshold (highest precision = %f): %f with recall %f',
-                        optimal_threshold_pr, precision[optimal_index], recall[optimal_index])
+        # Plot Recall vs Thresholds
+        plt.figure()
+        plt.plot(thresholds_pr, recall[1:], color='blue', lw=2, label='Recall')
+        plt.xlabel('Threshold')
+        plt.ylabel('Recall')
+        plt.title('%s Recall vs Thresholds' % model_name)
+        # plt.legend(loc='lower right')
+
+        # Remove the legend
+        plt.legend().remove()
+
+        # Save the plot to the output directory.
+        recall_plot_path = os.path.join(output_directory, model_name_fp + '_recall_vs_thresholds.png')
+        plt.savefig(recall_plot_path)
+        plt.close()
+        logging.info('Saved the Recall vs Thresholds plot to %s', recall_plot_path)
+
+        # Plot Precision vs Thresholds
+        plt.figure()
+        plt.plot(thresholds_pr, precision[1:], color='blue', lw=2, label='Precision')
+        plt.xlabel('Threshold')
+        plt.ylabel('Precision')
+        plt.title('%s Precision vs Thresholds' % model_name)
+        # plt.legend(loc='lower right')
+        # Remove the legend
+        plt.legend().remove()
+        # Save the plot to the output directory.
+        precision_plot_path = os.path.join(output_directory, model_name_fp + '_precision_vs_thresholds.png')
+        plt.savefig(precision_plot_path)
+        plt.close()
+        logging.info('Saved the Precision vs Thresholds plot to %s', precision_plot_path)
+
+        # # Find the threshold that gives the highest precision (ideally with
+        # # recall > 0) or where precision == 1.0 (0 false positives).
+        # precision_1_indices = np.where(precision[:-1] == 1.0)[0]
+        # if len(precision_1_indices) > 0:
+        #     # If there are indices where precision == 1.0, use the one with the
+        #     # highest recall.
+        #     optimal_index = precision_1_indices[np.argmax(recall[precision_1_indices])]
+        #     optimal_threshold_pr = thresholds_pr[optimal_index]
+        #     logging.info('Optimal threshold (highest precision = 1.0): %f with recall %f',
+        #                 optimal_threshold_pr, recall[optimal_index])
+        # else:
+        #     # If no indices where precision == 1.0, use the one with the highest
+        #     # precision.
+        #     optimal_index = np.argmax(precision[:-1])
+        #     optimal_threshold_pr = thresholds_pr[optimal_index]
+        #     logging.info('Optimal threshold (highest precision = %f): %f with recall %f',
+        #                 optimal_threshold_pr, precision[optimal_index], recall[optimal_index])
 
         # Get the feature names.
         feature_names = features.columns.tolist()
@@ -369,7 +404,7 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
             plt.xticks(range(X_train.shape[1]), indices)
             plt.xlim([-1, X_train.shape[1]])
             # Save the plot to the output directory.
-            importance_plot_path = os.path.join(output_directory, model_name + '_feature_importances.png')
+            importance_plot_path = os.path.join(output_directory, model_name_fp + '_feature_importances.png')
             plt.savefig(importance_plot_path)
             plt.close()
             logging.info('Saved the feature importances plot to %s', importance_plot_path)
@@ -419,7 +454,7 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
             plt.xticks(range(X_train.shape[1]), indices)
             plt.xlim([-1, X_train.shape[1]])
             # Save the plot to the output directory.
-            coeff_plot_path = os.path.join(output_directory, model_name + '_feature_coefficients.png')
+            coeff_plot_path = os.path.join(output_directory, model_name_fp + '_feature_coefficients.png')
             plt.savefig(coeff_plot_path)
             plt.close()
             logging.info('Saved the feature coefficients plot to %s', coeff_plot_path)
@@ -468,7 +503,7 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
         # logging.info('Saved the classification report to %s', report_path)
 
         # Save the model.
-        model_path = os.path.join(output_directory, model_name + '_caller_model.pkl')
+        model_path = os.path.join(output_directory, model_name_fp + '_caller_model.pkl')
         logging.info('Saving the model to %s', model_path)
         joblib.dump(model, model_path)
         logging.info('Saved the model to %s', model_path)
