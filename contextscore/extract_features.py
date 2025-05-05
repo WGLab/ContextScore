@@ -89,10 +89,20 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
 
     logging.info("[TEST1] columns in the BED file: %s", bed_df.columns)
 
-    # Normalize the read depth and cluster size columns (sample-dependent).
-    bed_df['read_depth'] = (bed_df['read_depth'] - bed_df['read_depth'].mean()) / bed_df['read_depth'].std()
-    bed_df['cluster_size'] = (bed_df['cluster_size'] - bed_df['cluster_size'].mean()) / bed_df['cluster_size'].std()
-    logging.info('[TEST] Normalized the read depth and cluster size columns. Current columns: %s', bed_df.columns)
+    # Print the range of cluster size.
+    # logging.info('Range of cluster size (pre-normalization): %f - %f', bed_df['cluster_size'].min(), bed_df['cluster_size'].max())
+    # # Print the range of read depth.
+    # logging.info('Range of read depth (pre-normalization): %f - %f', bed_df['read_depth'].min(), bed_df['read_depth'].max())
+
+    # # Normalize the read depth and cluster size columns (sample-dependent).
+    # bed_df['read_depth'] = (bed_df['read_depth'] - bed_df['read_depth'].mean()) / bed_df['read_depth'].std()
+    # bed_df['cluster_size'] = (bed_df['cluster_size'] - bed_df['cluster_size'].mean()) / bed_df['cluster_size'].std()
+    # logging.info('[TEST] Normalized the read depth and cluster size columns. Current columns: %s', bed_df.columns)
+
+    # # Print the range of cluster size.
+    # logging.info('Range of cluster size: %f - %f', bed_df['cluster_size'].min(), bed_df['cluster_size'].max())
+    # # Print the range of read depth.
+    # logging.info('Range of read depth: %f - %f', bed_df['read_depth'].min(), bed_df['read_depth'].max())
 
     # Drop the genotype column and cn_state columns (due to redundancy).
     bed_df.drop(columns=['genotype', 'cn_state'], inplace=True)

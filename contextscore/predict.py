@@ -160,6 +160,13 @@ def score(model, input_vcf, output_vcf, buildver='hg38'):
     id_col = feature_df.pop('id')
     logging.info('Separated ID column from the features.')
 
+    # Normalize the cluster_size and read_depth columns using RobustScaler
+    logging.info('Normalizing the cluster_size and read_depth columns...')
+    from sklearn.preprocessing import RobustScaler, MinMaxScaler
+    scaler = RobustScaler()
+    robust_scaled = scaler.fit_transform(feature_df[['cluster_size', 'read_depth']])
+    feature_df[['cluster_size', 'read_depth']] = robust_scaled
+
     logging.info('Feature DataFrame:\n%s', feature_df.head())
 
     # Run the model on the features
@@ -200,7 +207,9 @@ def score(model, input_vcf, output_vcf, buildver='hg38'):
 
     # Optimal threshold determined by ROC curve using Youden's J statistic
     # For Random Forest, the optimal threshold is  0.450000
-    prob_threshold = 0.690000
+    # prob_threshold = 0.1  # Precision too low
+    # prob_threshold = 0.2
+    prob_threshold = 0.3
     filtered_indices = np.where(y_pred[:, 1] < prob_threshold)[0]
 
     logging.info('Number of variants under the probability threshold %.2f: %d', prob_threshold, len(filtered_indices))

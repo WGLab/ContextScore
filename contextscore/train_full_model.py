@@ -121,6 +121,38 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
     tp_data.drop(columns=['cn_state'], inplace=True, errors='ignore')
     fp_data.drop(columns=['cn_state'], inplace=True, errors='ignore')
 
+    # Normalize cluster_size and read_depth using Robust scaling.
+    logging.info('Normalizing cluster_size and read_depth using Robust scaling.')
+    from sklearn.preprocessing import RobustScaler, MinMaxScaler
+    # Combine the data.
+    combined_data = pd.concat([tp_data, fp_data])
+    # Create a RobustScaler object.
+    scaler = RobustScaler()
+    # Fit the scaler to the data.
+    robust_scaled = scaler.fit_transform(combined_data[['cluster_size', 'read_depth']])
+
+    # Update the data with the scaled values.
+    combined_data[['cluster_size', 'read_depth']] = robust_scaled
+    # Split the data back into true positives and false positives.
+    tp_data[['cluster_size', 'read_depth']] = combined_data[['cluster_size', 'read_depth']].iloc[:tp_data.shape[0]]
+    fp_data[['cluster_size', 'read_depth']] = combined_data[['cluster_size', 'read_depth']].iloc[tp_data.shape[0]:]
+
+    logging.info('Normalization completed.')
+
+    # Plot the distributions of cluster_size in the TP vs. FP data.
+    logging.info('Plotting the distributions of cluster_size in the TP vs. FP data.')
+    plt.figure(figsize=(10, 6))
+    sns.histplot(tp_data['cluster_size'], color='blue', label='True Positives', kde=True, stat="density", bins=30)
+    sns.histplot(fp_data['cluster_size'], color='red', label='False Positives', kde=True, stat="density", bins=30)
+    plt.xlabel('Cluster Size')
+    plt.ylabel('Density')
+    plt.title('Distribution of Cluster Size (True Positives vs False Positives)')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_directory, 'cluster_size_distribution.png'))
+    plt.close()
+    logging.info('Cluster size distribution plot saved to %s', os.path.join(output_directory, 'cluster_size_distribution.png'))
+
     # Analyze feature correlations in the collected data.
     logging.info('Analyzing feature correlations in the collected data.')
     corr_matrix = tp_data.corr()
@@ -219,6 +251,12 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
     logging.info('Feature names: %s', feature_names)
 
     for model_name, model in models.items():
+
+        # Skip SVC
+        if model_name == "SVC":
+            logging.info('Skipping SVC model.')
+            continue
+
         # # Split the data into training and testing sets.
         # logging.info('Splitting the data into training and testing sets (0.8/0.2).')
         # X_train, X_test, y_train, y_test = train_test_split(features, labels, test_size=0.2, random_state=42)
