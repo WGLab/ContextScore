@@ -65,7 +65,7 @@ from sklearn.metrics import roc_curve, auc, precision_recall_curve, confusion_ma
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from extract_features import extract_features
+from extract_features import extract_features, add_interaction_terms, normalize_column
 
 # Set up the logger.
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -122,69 +122,74 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
     fp_data.drop(columns=['cn_state'], inplace=True, errors='ignore')
 
     # Normalize cluster_size and read_depth using Robust scaling.
-    logging.info('Normalizing cluster_size and read_depth using Robust scaling.')
-    from sklearn.preprocessing import RobustScaler, MinMaxScaler
-    # Combine the data.
-    combined_data = pd.concat([tp_data, fp_data])
-    # Create a RobustScaler object.
-    scaler = RobustScaler()
-    # Fit the scaler to the data.
-    robust_scaled = scaler.fit_transform(combined_data[['cluster_size', 'read_depth']])
+    # logging.info('Normalizing cluster_size and read_depth using Robust scaling.')
+    # from sklearn.preprocessing import RobustScaler, MinMaxScaler
+    # # Combine the data.
+    # combined_data = pd.concat([tp_data, fp_data])
+    # # Create a RobustScaler object.
+    # scaler = RobustScaler()
+    # # Fit the scaler to the data.
+    # robust_scaled = scaler.fit_transform(combined_data[['cluster_size', 'read_depth']])
 
-    # Update the data with the scaled values.
-    combined_data[['cluster_size', 'read_depth']] = robust_scaled
-    # Split the data back into true positives and false positives.
-    tp_data[['cluster_size', 'read_depth']] = combined_data[['cluster_size', 'read_depth']].iloc[:tp_data.shape[0]]
-    fp_data[['cluster_size', 'read_depth']] = combined_data[['cluster_size', 'read_depth']].iloc[tp_data.shape[0]:]
+    # # Update the data with the scaled values.
+    # combined_data[['cluster_size', 'read_depth']] = robust_scaled
+    # # Split the data back into true positives and false positives.
+    # tp_data[['cluster_size', 'read_depth']] = combined_data[['cluster_size', 'read_depth']].iloc[:tp_data.shape[0]]
+    # fp_data[['cluster_size', 'read_depth']] = combined_data[['cluster_size', 'read_depth']].iloc[tp_data.shape[0]:]
 
-    logging.info('Normalization completed.')
+    # logging.info('Normalization completed.')
+
+    # # Drop the cluster_size column
+    # logging.info('Dropping the cluster_size column from the data.')
+    # tp_data.drop(columns=['cluster_size'], inplace=True)
+    # fp_data.drop(columns=['cluster_size'], inplace=True)
 
     # Plot the distributions of cluster_size in the TP vs. FP data.
-    logging.info('Plotting the distributions of cluster_size in the TP vs. FP data.')
-    plt.figure(figsize=(10, 6))
-    sns.histplot(tp_data['cluster_size'], color='blue', label='True Positives', kde=True, stat="density", bins=30)
-    sns.histplot(fp_data['cluster_size'], color='red', label='False Positives', kde=True, stat="density", bins=30)
-    plt.xlabel('Cluster Size')
-    plt.ylabel('Density')
-    plt.title('Distribution of Cluster Size (True Positives vs False Positives)')
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_directory, 'cluster_size_distribution.png'))
-    plt.close()
-    logging.info('Cluster size distribution plot saved to %s', os.path.join(output_directory, 'cluster_size_distribution.png'))
+    # logging.info('Plotting the distributions of cluster_size in the TP vs. FP data.')
+    # plt.figure(figsize=(10, 6))
+    # sns.histplot(tp_data['cluster_size'], color='blue', label='True Positives', kde=True, stat="density", bins=30)
+    # sns.histplot(fp_data['cluster_size'], color='red', label='False Positives', kde=True, stat="density", bins=30)
+    # plt.xlabel('Cluster Size')
+    # plt.ylabel('Density')
+    # plt.title('Distribution of Cluster Size (True Positives vs False Positives)')
+    # plt.legend()
+    # plt.tight_layout()
+    # plt.savefig(os.path.join(output_directory, 'cluster_size_distribution.png'))
+    # plt.close()
+    # logging.info('Cluster size distribution plot saved to %s', os.path.join(output_directory, 'cluster_size_distribution.png'))
 
     # Analyze feature correlations in the collected data.
-    logging.info('Analyzing feature correlations in the collected data.')
-    corr_matrix = tp_data.corr()
-    plt.figure(figsize=(12, 10))
-    sns.heatmap(corr_matrix, annot=True, fmt=".2f", cmap='coolwarm', square=True, cbar_kws={"shrink": .8})
-    plt.title('Feature Correlation Matrix (True Positives)')
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_directory, 'feature_correlation_tp.png'))
-    plt.close()
-    corr_matrix = fp_data.corr()
-    plt.figure(figsize=(12, 10))
-    sns.heatmap(corr_matrix, annot=True, fmt=".2f", cmap='coolwarm', square=True, cbar_kws={"shrink": .8})
-    plt.title('Feature Correlation Matrix (False Positives)')
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_directory, 'feature_correlation_fp.png'))
-    plt.close()
-    logging.info('Feature correlation analysis completed. TP saved to %s and FP saved to %s',
-                 os.path.join(output_directory, 'feature_correlation_tp.png'),
-                 os.path.join(output_directory, 'feature_correlation_fp.png'))
+    # logging.info('Analyzing feature correlations in the collected data.')
+    # corr_matrix = tp_data.corr()
+    # plt.figure(figsize=(12, 10))
+    # sns.heatmap(corr_matrix, annot=True, fmt=".2f", cmap='coolwarm', square=True, cbar_kws={"shrink": .8})
+    # plt.title('Feature Correlation Matrix (True Positives)')
+    # plt.tight_layout()
+    # plt.savefig(os.path.join(output_directory, 'feature_correlation_tp.png'))
+    # plt.close()
+    # corr_matrix = fp_data.corr()
+    # plt.figure(figsize=(12, 10))
+    # sns.heatmap(corr_matrix, annot=True, fmt=".2f", cmap='coolwarm', square=True, cbar_kws={"shrink": .8})
+    # plt.title('Feature Correlation Matrix (False Positives)')
+    # plt.tight_layout()
+    # plt.savefig(os.path.join(output_directory, 'feature_correlation_fp.png'))
+    # plt.close()
+    # logging.info('Feature correlation analysis completed. TP saved to %s and FP saved to %s',
+    #              os.path.join(output_directory, 'feature_correlation_tp.png'),
+    #              os.path.join(output_directory, 'feature_correlation_fp.png'))
     
     # Analyze feature correlations in the combined data.
-    logging.info('Analyzing feature correlations in the combined data.')
-    combined_data = pd.concat([tp_data, fp_data])
-    corr_matrix_combined = combined_data.corr()
-    plt.figure(figsize=(12, 10))
-    sns.heatmap(corr_matrix_combined, annot=True, fmt=".2f", cmap='coolwarm', square=True, cbar_kws={"shrink": .8})
-    plt.title('Feature Correlation Matrix (Combined Data)')
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_directory, 'feature_correlation_combined.png'))
-    plt.close()
-    logging.info('Feature correlation analysis completed for combined data. Saved to %s',
-                 os.path.join(output_directory, 'feature_correlation_combined.png'))
+    # logging.info('Analyzing feature correlations in the combined data.')
+    # combined_data = pd.concat([tp_data, fp_data])
+    # corr_matrix_combined = combined_data.corr()
+    # plt.figure(figsize=(12, 10))
+    # sns.heatmap(corr_matrix_combined, annot=True, fmt=".2f", cmap='coolwarm', square=True, cbar_kws={"shrink": .8})
+    # plt.title('Feature Correlation Matrix (Combined Data)')
+    # plt.tight_layout()
+    # plt.savefig(os.path.join(output_directory, 'feature_correlation_combined.png'))
+    # plt.close()
+    # logging.info('Feature correlation analysis completed for combined data. Saved to %s',
+    #              os.path.join(output_directory, 'feature_correlation_combined.png'))
 
     # Add the labels.
     tp_data['label'] = 1
@@ -227,9 +232,29 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
     # Combine the true positive and false positive data.
     data = pd.concat([tp_data, fp_data])
 
+    # Drop the chromosome column from the data.
+    data.drop(columns=['chrom'], inplace=True)
+
+    # Normalize cluster_size and read_depth
+    # data = normalize_column(data, 'cluster_size')
+    # data = normalize_column(data, 'read_depth')
+
+    # Add interaction terms to the data.
+    data = add_interaction_terms(data)
+
+    # Drop the SV length column
+    data.drop(columns=['sv_length'], inplace=True)
+
+    # Drop the SV length and aln_type columns.
+    # data.drop(columns=['sv_length', 'aln_type'], inplace=True)
+
     # Get the features and labels.
     features = data.drop(columns=['label'])
     labels = data["label"]
+     
+    # Print the number of features.
+    logging.info('Number of features: %d', features.shape[1])
+    logging.info('Feature names: %s', features.columns.tolist())
 
     # Train different models.
     models = {
@@ -244,17 +269,27 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
     X_train, X_test, y_train, y_test = train_test_split(features, labels, test_size=0.2, random_state=42)
     logging.info('Data split completed. Training set size: %d, Testing set size: %d',
                  X_train.shape[0], X_test.shape[0])
-    # Print the number of features.
-    logging.info('Number of features: %d', X_train.shape[1])
-    # Print the feature names.
-    feature_names = features.columns.tolist()
-    logging.info('Feature names: %s', feature_names)
+    
+    # # Drop the chromosome column from the features.
+    # X_train.drop(columns=['chrom'], inplace=True)
+    # X_test.drop(columns=['chrom'], inplace=True)
+
+    # # Print the number of features.
+    # logging.info('Number of features: %d', X_train.shape[1])
+    # # Print the feature names.
+    # feature_names = features.columns.tolist()
+    # logging.info('Feature names: %s', feature_names)
 
     for model_name, model in models.items():
 
         # Skip SVC
         if model_name == "SVC":
             logging.info('Skipping SVC model.')
+            continue
+
+        # Skip all but XGBoost
+        if model_name != "XGBoost":
+            logging.info('Skipping %s model.', model_name)
             continue
 
         # # Split the data into training and testing sets.
@@ -335,7 +370,7 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
         plt.ylim([0.0, 1.05])
         plt.xlabel('False Positive Rate')
         plt.ylabel('True Positive Rate')
-        plt.title('Receiver Operating Characteristic (Training Set)')
+        plt.title('{} Receiver Operating Characteristic (Training Set)'.format(model_name))
         plt.legend(loc='lower right')
         # Save the plot to the output directory.
         model_name_fp = model_name.replace(" ", "_")
@@ -352,7 +387,7 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
         plt.ylim([0.0, 1.05])
         plt.xlabel('False Positive Rate')
         plt.ylabel('True Positive Rate')
-        plt.title('Receiver Operating Characteristic (Testing Set)')
+        plt.title('{} Receiver Operating Characteristic (Testing Set)'.format(model_name_fp))
         plt.legend(loc='lower right')
         # Save the plot to the output directory.
         roc_plot_path = os.path.join(output_directory, model_name + '_roc_curve_test.png')
@@ -419,6 +454,28 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
 
         # Get the feature names.
         feature_names = features.columns.tolist()
+
+        # Create a dictionary of feature names and their labels.
+        feature_name_dict = {
+            "aln_type": "Alignment Type",
+            "aln_type_hmm": "HMM Prediction",
+            "simpleRepeat": "Simple Repeat",
+            "segdup": "Segmental Duplications",
+            "cluster_size": "Cluster Size",
+            "read_depth": "Read Depth",
+            "aln_offset": "Alignment Offset",
+            "hmm_llh": "HMM Log Likelihood",
+            "phastCons": "PhastCons Conservation Score",
+            "sv_length": "Structural Variant Length",
+            "sv_type": "Structural Variant Type",
+            "fragile_site": "Fragile Site",
+            "centromere": "Centromere",
+            "telomere": "Telomere"
+        }
+
+        # Map the feature names to their labels.
+        feature_names = [feature_name_dict.get(name, name) for name in feature_names]
+
         logging.info('Feature names: %s', feature_names)
         logging.info('Number of features: %d', len(feature_names))
 
@@ -429,6 +486,8 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
 
             # Sort the feature importances in descending order.
             indices = np.argsort(importances)[::-1]
+            top_features = [feature_names[i] for i in indices]
+            top_importances = [importances[i] for i in indices]
 
             # Print the feature ranking.
             logging.info('Feature ranking:')
@@ -437,15 +496,119 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
 
             # Plot the feature importances.
             plt.figure()
-            plt.title('Feature Importances')
-            plt.bar(range(X_train.shape[1]), importances[indices], align='center')
-            plt.xticks(range(X_train.shape[1]), indices)
-            plt.xlim([-1, X_train.shape[1]])
+            plt.title('XGBoost Feature Importances')
+            plt.bar(range(len(top_features)), top_importances, align='center')
+            plt.xticks(range(len(top_features)), top_features, rotation=45, ha='right')
+            # plt.bar(range(X_train.shape[1]), importances[indices], align='center')
+            # plt.xticks(range(X_train.shape[1]), indices)
+            # plt.xlim([-1, X_train.shape[1]])
+
+            # Set the x ticks as the feature names
+            # plt.xticks(range(X_train.shape[1]), [feature_names[i] for i in indices], rotation=45)
+            # plt.xlim([-1, X_train.shape[1]])
+            plt.xlabel('')
+            plt.ylabel('Importance')
+            plt.tight_layout()
+
             # Save the plot to the output directory.
             importance_plot_path = os.path.join(output_directory, model_name_fp + '_feature_importances.png')
-            plt.savefig(importance_plot_path)
+            plt.savefig(importance_plot_path, bbox_inches='tight')
             plt.close()
             logging.info('Saved the feature importances plot to %s', importance_plot_path)
+
+            # Plot the % of SVs (TPs and FPs) overlapping with the genomic
+            # context regions (simpleRepeat, segdup, fragile_site, phastCons >
+            # 0.5)
+            # print("Number of TPs: ", tp_data.shape[0])
+            # print("Number of FPs: ", fp_data.shape[0])
+            # logging.info('Plotting the percentage of SVs (TPs and FPs) overlapping with the genomic context regions.')
+            # for feature in ['simpleRepeat', 'segdup', 'fragile_site', 'phastCons']:
+            #     if feature == 'phastCons':
+            #         tp_data_feature = tp_data[tp_data[feature] > 0.5]
+            #         fp_data_feature = fp_data[fp_data[feature] > 0.5]
+            #     else:
+            #         tp_data_feature = tp_data[tp_data[feature] == 1]
+            #         fp_data_feature = fp_data[fp_data[feature] == 1]
+            #     tp_pcnt = tp_data_feature.shape[0] / tp_data.shape[0] * 100
+            #     fp_pcnt = fp_data_feature.shape[0] / fp_data.shape[0] * 100
+            #     logging.info('Feature %s: TP = %.2f%%, FP = %.2f%%', feature, tp_pcnt, fp_pcnt)
+            #     plt.figure()
+            #     plt.bar(['TP', 'FP'], [tp_pcnt, fp_pcnt], color=['#0072B2', '#D55E00'])  # Blue, Vermillion (colorblind-friendly)
+            #     plt.xlabel('SV Type')
+            #     plt.ylabel('Percentage of SVs')
+            #     plt.title('Percentage of SVs Overlapping with %s' % feature)
+            #     plt.ylim([0, 100])
+            #     # Save the plot to the output directory.
+            #     feature_plot_path = os.path.join(output_directory, model_name_fp + '_%s.png' % feature)
+            #     plt.savefig(feature_plot_path, bbox_inches='tight')
+            #     plt.close()
+            #     logging.info('Saved the %s plot to %s', feature, feature_plot_path)
+
+            # # Exit early to verify the feature importances.
+            # sys.exit(0)
+
+            # Convert bool columns to int for SHAP analysis.
+            bool_cols = X_train.select_dtypes(include=['bool']).columns
+            X_train[bool_cols] = X_train[bool_cols].astype(int)
+
+            # Figure out which column has dtype object in X_train.
+            print("X_train dtypes:")
+            print(X_train.dtypes)
+            print("X_train columns:")
+            print(X_train.columns)
+
+            # Analyze the feature importances using SHAP values.
+            import shap
+            explainer = shap.Explainer(model, X_train)
+            shap_values = explainer(X_train)
+            # Plot the SHAP values.
+            plt.figure(figsize=(10, 6))
+            shap.summary_plot(shap_values, X_train, feature_names=feature_names, show=False)
+            # Save the SHAP summary plot to the output directory.
+            shap_plot_path = os.path.join(output_directory, model_name_fp + '_shap_summary_plot.png')
+            plt.savefig(shap_plot_path, bbox_inches='tight')
+            plt.close()
+            logging.info('Saved the SHAP summary plot to %s', shap_plot_path)
+
+            # -----------------------------------------------
+            # SV Length vs SHAP values
+            # -----------------------------------------------
+
+            # # Plot 1: SHAP values vs SV length.
+            # plt.figure(figsize=(10, 6))
+            # sns.scatterplot(data=X_train, x='abs_SVLEN', y='shap_SVLEN', hue='true_label', alpha=0.6)
+            # plt.xscale('log')
+            # plt.xlabel("SV Length (bp, log scale)")
+            # plt.ylabel("SHAP value for SV Length")
+            # plt.title("SHAP value vs. SV length")
+            # plt.axhline(0, color='gray', linestyle='--')
+            # plt.legend(title="True Label")
+            # plt.tight_layout()
+            # shap_svlen_plot_path = os.path.join(output_directory, model_name_fp + '_shap_svlen.png')
+            # plt.savefig(shap_svlen_plot_path, bbox_inches='tight')
+            # plt.close()
+            # logging.info('Saved the SHAP value vs. SV length plot to %s', shap_svlen_plot_path)
+
+            # # Plot 2: Predicted probability vs SV length.
+            # X_train['y_prob'] = model.predict_proba(X_train)[:, 1]
+            # plt.figure(figsize=(10, 6))
+            # sns.scatterplot(data=X_train, x='abs_SVLEN', y='y_prob', hue='true_label', alpha=0.6)
+            # plt.xscale('log')
+            # plt.xlabel("SV Length (bp, log scale)")
+            # plt.ylabel("Predicted Probability of Being True Positive")
+            # plt.title("Predicted Probability vs. SV length")
+            # plt.axhline(0.5, color='gray', linestyle='--')
+            # plt.legend(title="True Label")
+            # plt.tight_layout()
+            # prob_svlen_plot_path = os.path.join(output_directory, model_name_fp + '_prob_svlen.png')
+            # plt.savefig(prob_svlen_plot_path, bbox_inches='tight')
+            # plt.close()
+            # logging.info('Saved the predicted probability vs. SV length plot to %s', prob_svlen_plot_path)
+
+            # plt.title('Feature Importances')
+
+            # [TEST] Exit after this step to verify the feature importances.
+            # sys.exit(0)
 
         # For SVC, get the coefficients.
         # if model_name == "SVC":
@@ -554,6 +717,74 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
         # logging.info('Cross-validation scores: %s', scores)
         # logging.info('Mean cross-validation score: %f', scores.mean())
 
+    # Exit early to test the saved model.
+    sys.exit(0)
+
+    # Run a cross-validation analysis splitting the data by chromosome.
+    logging.info('Running cross-validation analysis splitting the data by chromosome.')
+    # chromosomes = features['chrom'].unique()
+
+    # Specify the chromosomes to not include non-standard chromosomes.
+    chromosomes = ['chr1', 'chr2', 'chr3', 'chr4', 'chr5', 'chr6', 'chr7', 'chr8', 'chr9', 'chr10',
+                  'chr11', 'chr12', 'chr13', 'chr14', 'chr15', 'chr16', 'chr17', 'chr18', 'chr19', 'chr20', 'chr21', 'chr22', 'chrX', 'chrY']
+    
+    logging.info('Chromosomes: %s', chromosomes)
+    f1_scores = {}
+    for model_name, model in models.items():
+        # Skip SVC
+        if model_name == "SVC":
+            logging.info('Skipping SVC model for cross-validation analysis.')
+            continue
+
+        for chrom in chromosomes:
+            logging.info('Training the %s model on chromosome %s.', model_name, chrom)
+            # Split the data into training and testing sets by chromosome.
+            X_train_chrom = features[features['chrom'] != chrom].copy()
+            y_train_chrom = labels[features['chrom'] != chrom].copy()
+            X_test_chrom = features[features['chrom'] == chrom].copy()
+            y_test_chrom = labels[features['chrom'] == chrom].copy()
+
+            # Drop the chromosome column from the features.
+            X_train_chrom.drop(columns=['chrom'], inplace=True)
+            X_test_chrom.drop(columns=['chrom'], inplace=True)
+
+            logging.info('Training set size: %d, Testing set size: %d',
+                         X_train_chrom.shape[0], X_test_chrom.shape[0])
+            # Train the model.
+            model.fit(X_train_chrom, y_train_chrom)
+            # Get the predicted probabilities for the testing set.
+            y_test_chrom_prob = model.predict_proba(X_test_chrom)[:, 1]
+            # Compute the ROC curve and ROC area for the testing set.
+            fpr_chrom, tpr_chrom, _ = roc_curve(y_test_chrom, y_test_chrom_prob)
+            roc_auc_chrom = auc(fpr_chrom, tpr_chrom)
+            logging.info('ROC AUC score for the %s model on chromosome %s: %f', model_name, chrom, roc_auc_chrom)
+
+            # Compute the F1 score for the testing set.
+            from sklearn.metrics import f1_score
+            y_test_chrom_pred = (y_test_chrom_prob >= optimal_threshold).astype(int)
+            f1 = f1_score(y_test_chrom, y_test_chrom_pred)
+            # f1_scores.append(f1)
+            f1_scores[(model_name, chrom)] = f1
+            logging.info('F1 score for the %s model on chromosome %s: %f', model_name, chrom, f1)
+            
+    logging.info('Cross-validation analysis completed. F1 scores: %s', f1_scores)
+
+    # Plot the F1 scores for each model and chromosome (one plot per model).
+    logging.info('Plotting the F1 scores for each model and chromosome.')
+    for model_name in models.keys():
+        model_f1_scores = {chrom: f1_scores[(model_name, chrom)] for chrom in chromosomes if (model_name, chrom) in f1_scores}
+        plt.figure(figsize=(10, 6))
+        sns.barplot(x=list(model_f1_scores.keys()), y=list(model_f1_scores.values()), palette='viridis')
+        plt.xlabel('Chromosome')
+        plt.ylabel('F1 Score')
+        plt.title('F1 Scores for %s Model by Chromosome' % model_name)
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        # Save the plot to the output directory.
+        f1_plot_path = os.path.join(output_directory, model_name + '_f1_scores_by_chromosome.png')
+        plt.savefig(f1_plot_path)
+        plt.close()
+        logging.info('Saved the F1 scores plot to %s', f1_plot_path)
 
 def run(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, tp_bed_hg19=None, fp_bed_hg19=None):
     """Run the training process."""

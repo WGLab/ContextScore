@@ -52,7 +52,55 @@ def read_cytoband_file(cytoband_file):
 
     return chrom_dict
 
-# tp_data, tp_bed, annovar_path, db_path, tp_anno_outdir
+import pandas as pd
+import numpy as np
+
+def normalize_column(df, column):
+    """Normalize a column using z-score normalization."""
+    mean = df[column].mean()
+    std = df[column].std()
+    df[column] = (df[column] - mean) / std
+    return df
+
+def add_interaction_terms(df):
+    """Add interaction terms to the dataframe."""
+    # Normalize the sv_length column by dividing by 1000 to reduce the range.
+    df['log_svlen'] = np.log1p(np.abs(df['sv_length']))
+    # bed_df['svlen_rd'] = bed_df['log_svlen'] * bed_df['read_depth']
+    # bed_df['svlen_cs'] = bed_df['log_svlen'] * bed_df['cluster_size']
+    df['rd_cs'] = df['read_depth'] * df['cluster_size']
+    df['svlen_hmm'] = df['log_svlen'] * df['hmm_llh']
+    df['cs_hmm'] = df['cluster_size'] * df['hmm_llh']
+    df['rd_hmm'] = df['read_depth'] * df['hmm_llh']
+    # bed_df['rd_per_kb'] = bed_df['read_depth'] / (np.abs(bed_df['sv_length']) / 1000 + 1)
+    # bed_df['cs_per_kb'] = bed_df['cluster_size'] /
+    # (np.abs(bed_df['sv_length']) / 1000 + 1) ##
+    df['hmm_per_kb'] = df['hmm_llh'] / (np.abs(df['sv_length']) / 1000 + 1)
+
+    # df['svlen_rd'] = df['sv_length'] * df['read_depth']
+    # df['svlen_cs'] = df['sv_length'] * df['cluster_size']
+    # df['rd_cs'] = df['read_depth'] * df['cluster_size']
+    return df
+
+def add_overlap_count(df, chrom_col='chrom', start_col='start', end_col='end'):
+    """Add 'overlap_count' = number of other SVs on same chr that overlap each SV."""
+    out = pd.Series(0, index=df.index, dtype=np.int32)
+
+    for chrom, group in df.groupby(chrom_col, sort=False):
+        starts = group[start_col].to_numpy()
+        ends   = group[end_col].to_numpy()
+
+        # overlap if start_i < end_j  AND  start_j < end_i
+        overlap_matrix = (starts[:, None] < ends[None, :]) & \
+                         (starts[None, :] < ends[:, None])
+
+        # subtract 1 to drop the self-overlap on the diagonal
+        counts = overlap_matrix.sum(axis=1) - 1
+        out.loc[group.index] = counts.astype(np.int32)
+
+    df['overlap_count'] = out
+    return df
+
 
 def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion='hg38'):
     """Extract the features from the BED file, columns are in the first row:
@@ -133,8 +181,50 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
         'UNKNOWN': 9
     }
 
+    # The alignment types are comma-separated.
+    # Split the alignment types into a list.
+    bed_df['aln_type'] = bed_df['aln_type'].str.split(',')
+
+    # Throw an error and exit if any contain more than two
+    # alignment types.
+    if bed_df['aln_type'].apply(len).max() > 2:
+        logging.error('Alignment types contain more than two types.')
+        logging.error('Please check the input BED file.')
+        sys.exit(1)
+    else:
+        logging.info('Success: Alignment types contain at most two types.')
+
+    # Create a second column with whether one of the alignment types is HMM.
+    bed_df['aln_type_hmm'] = bed_df['aln_type'].apply(lambda x: 1 if 'HMM' in x else 0)
+
+    # Replace the alignment type to have only one type by removing the HMM type.
+    bed_df['aln_type'] = bed_df['aln_type'].apply(lambda x: [i for i in x if i != 'HMM'])
+
+    # Now all the alignment types should be just one type. Print an error if
+    # not and exit.
+    if bed_df['aln_type'].apply(len).max() > 1:
+        logging.error('Alignment types contain more than one type.')
+        logging.error('Please check the input BED file.')
+        sys.exit(1)
+    else:
+        logging.info('Success: Alignment types contain only one type.')
+
+    # Flatten the list of alignment types into a single string.
+    bed_df['aln_type'] = bed_df['aln_type'].apply(lambda x: x[0])
+
     # Map the alignment types to numbers.
     bed_df['aln_type'] = bed_df['aln_type'].map(aln_type_map)
+
+    # Create a one-hot encoding for the alignment types by creating a new column for each type.
+    # for aln_type in aln_type_map.keys():
+    #     bed_df[aln_type] = bed_df['aln_type'].apply(lambda x: 1 if aln_type in x else 0)
+
+    # # Drop the original aln_type column.
+    # bed_df.drop(columns=['aln_type'], inplace=True)
+    # logging.info('[TEST] Dropped the original aln_type column. Current columns: %s', bed_df.columns)
+    
+    # Map the alignment types to numbers.
+    # bed_df['aln_type'] = bed_df['aln_type'].map(aln_type_map)
 
     # Print the number of NaN values
     logging.info('Number of NaN values after aln_type mapping: %d', bed_df.isnull().sum().sum())
@@ -183,9 +273,61 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
     bed_df = add_annotations(bed_df, input_bed, annovar_path, db_path, outdiranno, buildversion, training_format)
     logging.info('Added ANNOVAR annotations to the features. Updated columns: %s', bed_df.columns)
 
-    # Drop the segdup column (too highly correlated with SVs).
-    # bed_df.drop(columns=['segdup'], inplace=True)
-    # logging.info('[TEST] Dropped the segdup column. Current columns: %s', bed_df.columns)
+    # Create a new column overlap_count that counts the number of SVs overlapping
+    # with each SV in the input BED file.
+    # This is done by counting the number of rows in the bed_df that have the same
+    # chrom, start, and end as the current row.
+
+    # ---------------------------------------------------------------
+    # logging.info('Adding overlap_count column to the features.')
+    # bed_df = add_overlap_count(bed_df, chrom_col='chrom', start_col='start', end_col='end')
+    # logging.info('Added overlap_count column to the features. Updated columns: %s', bed_df.columns)
+
+    # Print the bottom 10 unique values of the overlap_count column.
+    # Sort the unique values of the overlap_count column.
+    # sorted_unique_values = np.sort(bed_df['overlap_count'].unique())
+    # logging.info('Bottom 10 unique values of the overlap_count column: %s', sorted_unique_values[-10:])
+
+    # # Print the top 10 unique values of the overlap_count column.
+    # logging.info('Top 10 unique values of the overlap_count column: %s',
+    # sorted_unique_values[:10])
+    # ---------------------------------------------------------------
+
+    # Normalize the cluster_size and read_depth columns using RobustScaler
+    # logging.info('Normalizing the cluster_size and read_depth columns...')
+    # from sklearn.preprocessing import RobustScaler, MinMaxScaler
+    # scaler = RobustScaler()
+    # robust_scaled = scaler.fit_transform(bed_df[['cluster_size', 'read_depth']])
+    # bed_df[['cluster_size', 'read_depth']] = robust_scaled
+    # # robust_scaled = scaler.fit_transform(feature_df[['cluster_size', 'read_depth']])
+    # # feature_df[['cluster_size', 'read_depth']] = robust_scaled
+
+    # # Create an interaction term between sv_length and read_depth, sv_length
+    # # and cluster_size, read_depth and cluster_size, and sv_length and hmm_llh.
+    # # Normalize the sv_length column by dividing by 1000 to reduce the range.
+    # bed_df['log_svlen'] = np.log1p(np.abs(bed_df['sv_length']))
+    # # bed_df['svlen_rd'] = bed_df['log_svlen'] * bed_df['read_depth']
+    # # bed_df['svlen_cs'] = bed_df['log_svlen'] * bed_df['cluster_size']
+    # bed_df['rd_cs'] = bed_df['read_depth'] * bed_df['cluster_size']
+    # bed_df['svlen_hmm'] = bed_df['log_svlen'] * bed_df['hmm_llh']
+    # bed_df['cs_hmm'] = bed_df['cluster_size'] * bed_df['hmm_llh']
+    # bed_df['rd_hmm'] = bed_df['read_depth'] * bed_df['hmm_llh']
+    # # bed_df['rd_per_kb'] = bed_df['read_depth'] / (np.abs(bed_df['sv_length']) / 1000 + 1)
+    # # bed_df['cs_per_kb'] = bed_df['cluster_size'] /
+    # # (np.abs(bed_df['sv_length']) / 1000 + 1) ##
+    # bed_df['hmm_per_kb'] = bed_df['hmm_llh'] / (np.abs(bed_df['sv_length']) / 1000 + 1)
+    # logging.info('Added interaction terms to the features. Updated columns: %s', bed_df.columns)
+
+    # # Remove the raw SV length column and keep the log_svlen column.
+    # # Training data has size imbalance, so use the transformed sv_length
+    # bed_df.drop(columns=['sv_length'], inplace=True)
+
+    # # Drop the alignment type column (imbalanced).
+    # bed_df.drop(columns=['aln_type'], inplace=True)
+
+    # Drop cluster size and cs_per_kb
+    # bed_df.drop(columns=['cluster_size'], inplace=True)  # Dropped after normalization in train_full_model.py
+    # bed_df.drop(columns=['cs_per_kb'], inplace=True)
 
     # Finally map chromosome names to numbers.
     # Load a dictionary mapping chromosome names to numbers.
@@ -196,10 +338,20 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
     logging.info('Number of NaN values: %d', bed_df.isnull().sum().sum())
 
     # Map the chromosome names to numbers.
-    bed_df['chrom'] = bed_df['chrom'].map(chrom_dict)
+    # bed_df['chrom'] = bed_df['chrom'].map(chrom_dict)
 
-    # Actually drop the chrom, start, end columns.
-    bed_df.drop(columns=['chrom', 'start', 'end'], inplace=True)
+    # # Actually drop the chrom, start, end columns.
+    # bed_df.drop(columns=['chrom', 'start', 'end'], inplace=True)
+
+    # Fix the chromosome names to all start with 'chr' if they don't already.
+    bed_df['chrom'] = bed_df['chrom'].apply(lambda x: 'chr' + x if not x.startswith('chr') else x)
+
+    # Drop the start and end columns, but keep the chrom column for later use in
+    # cross-validation.
+    bed_df.drop(columns=['start', 'end'], inplace=True)
+
+    # Drop telomere and centromere columns (they don't affect predictions).
+    bed_df.drop(columns=['telomere', 'centromere'], inplace=True)
 
     logging.info('[TEST] Dropped the chrom, start, end columns. Final columns (TP): %s', bed_df.columns)
 

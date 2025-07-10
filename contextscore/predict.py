@@ -20,7 +20,7 @@ import seaborn as sns
 
 import matplotlib.pyplot as plt
 
-from extract_features import extract_features
+from extract_features import extract_features, add_interaction_terms
 
 def create_bed(input_vcf, output_bed):
     """Create a BED file from the input VCF file. Extract the following fields:
@@ -120,7 +120,7 @@ def create_bed(input_vcf, output_bed):
     bed_df.to_csv(output_bed, sep='\t', header=False, index=False)
     logging.info('Created BED file: %s', output_bed)
 
-def score(model, input_vcf, output_vcf, buildver='hg38'):
+def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Distribution'):
     """Score the structural variants using the binary classification model.
 
     Args:
@@ -151,6 +151,13 @@ def score(model, input_vcf, output_vcf, buildver='hg38'):
     feature_df = extract_features(bed_file, annovar_path, annovar_db_path, anno_outdir, buildver)
     logging.info('Extracted features from the BED file:\n%s', feature_df.head())
 
+    # Add interaction terms to the features
+    feature_df = add_interaction_terms(feature_df)
+    logging.info('Added interaction terms to the features.')
+
+    # Drop the SV length column
+    feature_df.drop(columns=['sv_length'], inplace=True)
+
     # Check if the feature extraction was successful
     if feature_df.empty:
         logging.error('Feature extraction failed. No features extracted.')
@@ -160,12 +167,16 @@ def score(model, input_vcf, output_vcf, buildver='hg38'):
     id_col = feature_df.pop('id')
     logging.info('Separated ID column from the features.')
 
-    # Normalize the cluster_size and read_depth columns using RobustScaler
-    logging.info('Normalizing the cluster_size and read_depth columns...')
-    from sklearn.preprocessing import RobustScaler, MinMaxScaler
-    scaler = RobustScaler()
-    robust_scaled = scaler.fit_transform(feature_df[['cluster_size', 'read_depth']])
-    feature_df[['cluster_size', 'read_depth']] = robust_scaled
+    # Separate the chrom column from the features
+    chrom_col = feature_df.pop('chrom')
+    logging.info('Separated chrom column from the features.')
+
+    # # Normalize the cluster_size and read_depth columns using RobustScaler
+    # logging.info('Normalizing the cluster_size and read_depth columns...')
+    # from sklearn.preprocessing import RobustScaler, MinMaxScaler
+    # scaler = RobustScaler()
+    # robust_scaled = scaler.fit_transform(feature_df[['cluster_size', 'read_depth']])
+    # feature_df[['cluster_size', 'read_depth']] = robust_scaled
 
     logging.info('Feature DataFrame:\n%s', feature_df.head())
 
@@ -179,7 +190,7 @@ def score(model, input_vcf, output_vcf, buildver='hg38'):
     # Plot a histogram of the probabilities
     # output_dir = os.path.dirname(output_vcf)
     # plt.hist(y_pred[:, 1], bins=20)
-    # plt.xlabel('Probability')
+    # plt.xlabel('Confidence Score')
     # plt.ylabel('Count')
     # plt.title('Probability Distribution')
     # if not os.path.exists(output_dir):
@@ -193,26 +204,39 @@ def score(model, input_vcf, output_vcf, buildver='hg38'):
     output_dir = os.path.dirname(output_vcf)
     fig, ax = plt.subplots()
     sns.histplot(y_pred[:, 1], bins=20, ax=ax)
-    ax.set_xlabel('Probability')
+    ax.set_xlabel('Confidence Score')
     ax.set_ylabel('Count')
-    ax.set_title('Probability Distribution')
+    # ax.set_title('Probability Distribution')
+    ax.set_title(title)
+
     # Save the plot to the output directory
     plt.savefig(os.path.join(output_dir, 'probabilities_seaborn.png'))
     logging.info('Saved the plot of the probabilities to %s.', os.path.join(output_dir, 'probabilities_seaborn.png'))
 
-    # Filter the VCF, using the id column to get the final indices
-    # prob_threshold = 0.1
-    # prob_threshold = 0.05
-    # filtered_indices = np.where(y_pred[:, 1] < prob_threshold)[0]
+    # Determine the threshold for filtering
+    # 22 May 2025
+    # prob_threshold = 0.001  # Does not affect results much
+    # prob_threshold = 0.2  # Lowered recall (too high)
+    # prob_threshold = 0.1  # Lowered recall (too high)
+    prob_threshold = 0.01  # Slightly lowered recall (too high)
+    # prob_threshold = 0.005  # Even slightlier lowered recall (too high)
+    # prob_threshold = 0.001
 
-    # Optimal threshold determined by ROC curve using Youden's J statistic
-    # For Random Forest, the optimal threshold is  0.450000
-    # prob_threshold = 0.1  # Precision too low
-    # prob_threshold = 0.2
-    prob_threshold = 0.3
     filtered_indices = np.where(y_pred[:, 1] < prob_threshold)[0]
 
     logging.info('Number of variants under the probability threshold %.2f: %d', prob_threshold, len(filtered_indices))
+
+    # Print all data for the filtered variants if >10kb absolute svlen
+    # print_filtered = True
+    # if print_filtered:
+    #     logging.info('Filtered variants:\n')
+    #     min_svlen = 10000
+    #     filtered_variants = feature_df.iloc[filtered_indices]
+    #     # Print all the features for the filtered variants
+    #     for index, row in filtered_variants.iterrows():
+    #         # Print if abs(svlen) > 8000 and HMM is not equal to zero
+    #         if abs(row['sv_length']) > min_svlen:
+    #             logging.info('Features: %s', row.to_dict())
 
     # Get the IDs of the filtered variants
     filtered_ids = id_col.iloc[filtered_indices].values
@@ -222,19 +246,28 @@ def score(model, input_vcf, output_vcf, buildver='hg38'):
     np.savetxt(filtered_ids_file, filtered_ids, fmt='%s')
     logging.info('Saved the filtered IDs to %s.', filtered_ids_file)
 
+    # Create a VCF file with only the filtered variants
+    removed_svs_vcf = os.path.join(output_dir, 'removed_svs.vcf')
+
     # Filter the input VCF file based on the filtered indices
     logging.info('Filtering the input VCF file based on the filtered indices...')
     filtered_records = set(filtered_ids)
     current_record = 0
     pass_count = 0
+    filter_count = 0
     total_records = 0
-    with open(input_vcf, 'r') as vcf_in, open(output_vcf, 'w') as vcf_out:
+    with open(input_vcf, 'r') as vcf_in, open(output_vcf, 'w') as vcf_out, open(removed_svs_vcf, 'w') as removed_out:
         for line in vcf_in:
             if line.startswith('#'):
                 # Write the header lines as they are
                 vcf_out.write(line)
+                removed_out.write(line)
             else:
-                if current_record not in filtered_records:
+                if current_record in filtered_records:
+                    # Write the line to the removed_svs.vcf file if the current record is in the filtered records
+                    removed_out.write(line)
+                    filter_count += 1
+                else:
                     # Write the line if the current record is not in the filtered records
                     vcf_out.write(line)
                     pass_count += 1
@@ -244,6 +277,7 @@ def score(model, input_vcf, output_vcf, buildver='hg38'):
 
     logging.info('Filtered the input VCF file and saved it to %s', output_vcf)
     logging.info('Scoring process completed successfully. Passed %d out of %d records.', pass_count, total_records)
+    logging.info('Removed %d records. See %s for details.', filter_count, removed_svs_vcf)
 
 
 if __name__ == '__main__':
@@ -258,6 +292,9 @@ if __name__ == '__main__':
                         help='Path to the model file.')
     parser.add_argument('--buildver', type=str, default='hg38',
                         help='Genome build version (default: hg38).')
+    parser.add_argument('--title', type=str, default='Probability Distribution',
+                        help='Title for the probability distribution plot (default: Probability Distribution).')
+    
     args = parser.parse_args()
     input_vcf = args.input
     output_vcf = args.output
@@ -305,5 +342,5 @@ if __name__ == '__main__':
         sys.exit(1)
 
     # Run the scoring function
-    score(model, input_vcf, output_vcf, buildver=buildver)
+    score(model, input_vcf, output_vcf, buildver=buildver, title=args.title)
     logging.info('Scoring process completed.')
