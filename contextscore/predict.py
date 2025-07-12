@@ -155,21 +155,41 @@ def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Dist
     feature_df = add_interaction_terms(feature_df)
     logging.info('Added interaction terms to the features.')
 
-    # Drop the SV length column
-    feature_df.drop(columns=['sv_length'], inplace=True)
+    # Drop the sv_type column (imbalance especially for inversions).
+    # logging.info('Dropping the sv_type column from the features.')
+    # feature_df.drop(columns=['sv_type'], inplace=True)
+
+    # # Drop the SV length column
+    # feature_df.drop(columns=['sv_length'], inplace=True)
+
+    # Drop the read_depth and cluster_size columns
+    # feature_df.drop(columns=['read_depth', 'cluster_size'], inplace=True)
+
+    # Drop the HMM log likelihood column
+    # feature_df.drop(columns=['hmm_llh'], inplace=True)
 
     # Check if the feature extraction was successful
     if feature_df.empty:
         logging.error('Feature extraction failed. No features extracted.')
         sys.exit(1)
 
-    # Separate the ID column from the features
-    id_col = feature_df.pop('id')
-    logging.info('Separated ID column from the features.')
+    # # Separate the ID column from the features
+    # id_col = feature_df.pop('id')
+    # logging.info('Separated ID column from the features.')
 
-    # Separate the chrom column from the features
+    # # Separate the chrom column from the features
+    # chrom_col = feature_df.pop('chrom')
+    # logging.info('Separated chrom column from the features.')
+
+    # Separate the ID, chrom, start, end, SV length, read depth, and cluster size columns from the features
+    id_col = feature_df.pop('id')
     chrom_col = feature_df.pop('chrom')
-    logging.info('Separated chrom column from the features.')
+    start_col = feature_df.pop('start')
+    end_col = feature_df.pop('end')
+    # sv_length_col = feature_df.pop('sv_length')
+    read_depth_col = feature_df.pop('read_depth')
+    cluster_size_col = feature_df.pop('cluster_size')
+    sv_type_str_col = feature_df.pop('sv_type_str')
 
     # # Normalize the cluster_size and read_depth columns using RobustScaler
     # logging.info('Normalizing the cluster_size and read_depth columns...')
@@ -211,16 +231,40 @@ def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Dist
 
     # Save the plot to the output directory
     plt.savefig(os.path.join(output_dir, 'probabilities_seaborn.png'))
-    logging.info('Saved the plot of the probabilities to %s.', os.path.join(output_dir, 'probabilities_seaborn.png'))
+    logging.info('Saved the plot of the probabilities to %s', os.path.join(output_dir, 'probabilities_seaborn.png'))
 
     # Determine the threshold for filtering
     # 22 May 2025
     # prob_threshold = 0.001  # Does not affect results much
     # prob_threshold = 0.2  # Lowered recall (too high)
     # prob_threshold = 0.1  # Lowered recall (too high)
-    prob_threshold = 0.01  # Slightly lowered recall (too high)
+    # prob_threshold = 0.01  # Slightly lowered recall (too high)
     # prob_threshold = 0.005  # Even slightlier lowered recall (too high)
     # prob_threshold = 0.001
+
+    # 10 July 2025 - Feature updates for large SVs
+    # prob_threshold = 0.01  # Low precision, high recall (same recall as no filtering)
+    # prob_threshold = 0.05 # Same result, improved precision
+    # prob_threshold = 0.1  # Same result, improved precision
+    #prob_threshold = 0.2  # Same result, improved precision
+    # prob_threshold = 0.25
+    # prob_threshold = 0.3  # Slightly lowered recall, improved precision
+    # prob_threshold = 0.4  # Lowered recall, inversions are not highest recall anymore, but achieved overal highest F1 score
+    # prob_threshold = 0.35  # Lowered recall, inversions are not highest recall
+    # anymore, F1 is equal to Sniffles2
+    # prob_threshold = 0.32
+
+    # 11 July 2025 - Feature updates for large SVs
+    # prob_threshold = 0.1  # Lowered recall
+    # prob_threshold = 0.05
+
+    # Engineering feature interaction terms
+    # prob_threshold = 0.01  # Too high SV counts
+    # prob_threshold = 0.1
+    # prob_threshold = 0.3  # Lowered recall
+    prob_threshold = 0.2
+    # prob_threshold = 0.02  # Too many SVs
+    # prob_threshold = 0.01
 
     filtered_indices = np.where(y_pred[:, 1] < prob_threshold)[0]
 
@@ -244,10 +288,51 @@ def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Dist
     # Save the filtered IDs to a text file
     filtered_ids_file = os.path.join(output_dir, 'filtered_ids.txt')
     np.savetxt(filtered_ids_file, filtered_ids, fmt='%s')
-    logging.info('Saved the filtered IDs to %s.', filtered_ids_file)
+    logging.info('Saved the filtered IDs to %s', filtered_ids_file)
 
     # Create a VCF file with only the filtered variants
     removed_svs_vcf = os.path.join(output_dir, 'removed_svs.vcf')
+
+    # Create a CSV file with the filtered variants (CHROM, POS, ID, SVTYPE,
+    # SVLEN, [... SHAP value for each feature], Predicted probability, Predicted
+    # class)
+    
+    logging.info('Creating a CSV file with the filtered variants...')
+    import shap
+    explainer = shap.TreeExplainer(clf)
+    shap_values = explainer.shap_values(feature_df)
+    shap_df = pd.DataFrame(shap_values, columns=feature_df.columns)
+    shap_df['id'] = id_col.values
+    shap_df['chrom'] = chrom_col.values
+    shap_df['start'] = start_col.values
+    shap_df['end'] = end_col.values
+    shap_df['sv_type_str'] = sv_type_str_col.values
+    # shap_df['sv_length'] = sv_length_col.values
+    shap_df['sv_length'] = feature_df['sv_length'].values  # Use the original sv_length from feature_df
+    shap_df['read_depth'] = read_depth_col.values
+    shap_df['cluster_size'] = cluster_size_col.values
+    
+    shap_df['predicted_probability'] = y_pred[:, 1]
+    shap_df['predicted_class'] = (y_pred[:, 1] >= prob_threshold).astype(int)
+    # for col in shap_df.columns:
+    #     if col not in ['id', 'chrom', 'predicted_probability', 'predicted_class']:
+    #         shap_df[col] = shap_df[col].astype(float)
+    shap_df = shap_df[shap_df['id'].isin(filtered_ids)]
+    logging.info('Filtered SHAP values DataFrame:\n%s', shap_df.head())
+    logging.info('Number of filtered variants: %d', len(shap_df))
+
+    # Save the SHAP values to a CSV file
+    logging.info('Saving the filtered variant SHAP values to a CSV file...')
+
+    # Move the CHROM, START, END, SVTYPE, SVLEN, READ_DEPTH, CLUSTER_SIZE, PREDICTED_PROBABILITY, PREDICTED_CLASS columns to the front
+    shap_df = shap_df[['chrom', 'id', 'start', 'end', 'sv_type_str', 'sv_length', 'read_depth', 'cluster_size',
+                       'predicted_probability', 'predicted_class'] + 
+                       [col for col in shap_df.columns if col not in ['chrom', 'id', 'start', 'end', 'sv_type_str', 'sv_length', 'read_depth', 'cluster_size', 'predicted_probability', 'predicted_class']]]
+    # shap_df = shap_df[['chrom', 'id', 'predicted_probability', 'predicted_class'] + [col for col in shap_df.columns if col not in ['chrom', 'id', 'predicted_probability', 'predicted_class']]]
+
+    shap_csv_file = os.path.join(output_dir, 'filtered_variants.csv')
+    shap_df.to_csv(shap_csv_file, index=False)
+    logging.info('Saved the filtered variant SHAP values to %s', shap_csv_file)
 
     # Filter the input VCF file based on the filtered indices
     logging.info('Filtering the input VCF file based on the filtered indices...')

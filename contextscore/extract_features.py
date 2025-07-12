@@ -64,22 +64,96 @@ def normalize_column(df, column):
 
 def add_interaction_terms(df):
     """Add interaction terms to the dataframe."""
-    # Normalize the sv_length column by dividing by 1000 to reduce the range.
-    df['log_svlen'] = np.log1p(np.abs(df['sv_length']))
-    # bed_df['svlen_rd'] = bed_df['log_svlen'] * bed_df['read_depth']
-    # bed_df['svlen_cs'] = bed_df['log_svlen'] * bed_df['cluster_size']
-    df['rd_cs'] = df['read_depth'] * df['cluster_size']
-    df['svlen_hmm'] = df['log_svlen'] * df['hmm_llh']
-    df['cs_hmm'] = df['cluster_size'] * df['hmm_llh']
-    df['rd_hmm'] = df['read_depth'] * df['hmm_llh']
-    # bed_df['rd_per_kb'] = bed_df['read_depth'] / (np.abs(bed_df['sv_length']) / 1000 + 1)
-    # bed_df['cs_per_kb'] = bed_df['cluster_size'] /
-    # (np.abs(bed_df['sv_length']) / 1000 + 1) ##
-    df['hmm_per_kb'] = df['hmm_llh'] / (np.abs(df['sv_length']) / 1000 + 1)
+    # Log-transform the sv_length column to reduce the range.
+    # df['log_svlen'] = np.log1p(np.abs(df['sv_length']))
 
-    # df['svlen_rd'] = df['sv_length'] * df['read_depth']
-    # df['svlen_cs'] = df['sv_length'] * df['cluster_size']
+    # Log-transform the read_depth column to reduce the range.
+    # df['log_rd'] = np.log1p(np.abs(df['read_depth']))
+
+    # Log-transform the cluster_size column to reduce the range.
+    # df['log_cs'] = np.log1p(np.abs(df['cluster_size']))
+
+    # Add a feature for whether the SV is a CNV (DUP, DEL with non-zero HMM log
+    # likelihood).
+    # df['is_cnv_hmm'] = df['sv_type'].apply(lambda x: 1 if x in [0, 1] else 0)  # Assuming 0 is DEL and 1 is DUP
+    # df['is_cnv_hmm'] = df['is_cnv_hmm'] & (df['hmm_llh'] != 0)
+
+    # Update hmm_llh, set 0 to np.nan
+    df['hmm_llh_missing'] = (df['hmm_llh'] == 0).astype(int)
+    df['hmm_llh'] = df['hmm_llh'].replace(0, np.nan)
+
+    # Replace hmm_llh with likelihood
+    # df['hmm_llh'] = np.clip(np.exp(df['hmm_llh']), 1e-6, 0.999999)
+
+    # Cap hmm log likelihood to avoid extreme values.
+    df['hmm_llh'] = np.clip(df['hmm_llh'], -1e6, 0)
+
+    # Boolean for whether the SV is an inversion (INV).
+    df['is_inv'] = df['sv_type'].apply(lambda x: 1 if x == 2 else 0)  # Assuming 2 is INV
+
+    # SV length interaction terms
+    # df['svlenkb_cs'] = np.abs(df['sv_length']) / 1000 * df['cluster_size']
+    # df['svlenkb_rd'] = np.abs(df['sv_length']) / 1000 * df['read_depth']
+    # df['svlenkb_hmm'] = np.abs(df['sv_length']) / 1000 * df['hmm_llh']
+    # df['hmm_llh_scaled'] = df['hmm_llh'] / np.log1p(np.abs(df['sv_length']))
+
+    # df['hmm_llh_scaled'] = df['hmm_llh'] / (np.log1p(np.abs(df['sv_length'])))
+    # df['hmm_llh_per_kb'] = df['hmm_llh_scaled'] / (np.abs(df['sv_length']) / 1000 + 1e-6)
+
+    # Cluster size / read depth interaction terms
+    df['cs_rd'] = df['cluster_size'] / (df['read_depth'] + 1e-6)
+
+    # Segdup * HMM llh interaction term
+    # df['segdup_hmm'] = df['segdup'] * df['hmm_llh']
+
+    # Segdup * cs/rd interaction terms
+    df['segdup_cs_rd'] = df['segdup'] * df['cs_rd']
+
+    # Segdup * sv_length interaction term
+    # df['segdup_svlen'] = df['segdup'] * np.abs(df['sv_length'])
+
+    # Replace nans in segdup_hmm with 0
+    # df['segdup_hmm'] = df['segdup_hmm'].fillna(0)
+
+    # Drop the segdup column
+    df.drop(columns=['segdup'], inplace=True)
+    
+    # ---
+    # Cluster size per kb
+    # df['cs_per_kb'] = df['cluster_size'] / (np.abs(df['sv_length']) / 1000 + 1e-6)
+
+    # # Read depth per kb
+    # df['rd_per_kb'] = df['read_depth'] / (np.abs(df['sv_length']) / 1000 +
+    # 1e-6)
+    # ---
+
+    # Segmental duplication interaction terms
+    # CNVs are mostly in segmental duplications, so we can use the
+    # segmental duplication score to create interaction terms.
+    # df['is_dup_and']
+
+    # Cluster size * sv_length
+    # df['log_svlen_cs'] = df['log_svlen'] + df['log_cs']
+
+    # HMM log likelihood * sv_length
+    # df['log_svlen_hmm'] = df['log_svlen'] + df['hmm_llh']
+
+    # Remove log_cs
+    # df.drop(columns=['log_cs'], inplace=True)
+
+    # Read depth * sv_length
+    # df['log_svlen_rd'] = df['log_svlen'] + df['log_rd']
+
+    # Remove the log_svlen, log_rd, and log_cs columns, keeping the interaction
+    # terms only.
+    # df.drop(columns=['log_svlen', 'log_rd', 'log_cs'], inplace=True)
+
     # df['rd_cs'] = df['read_depth'] * df['cluster_size']
+    # df['svlen_hmm'] = df['log_svlen'] * df['hmm_llh']
+    # df['cs_hmm'] = df['cluster_size'] * df['hmm_llh']
+    # df['rd_hmm'] = df['read_depth'] * df['hmm_llh']
+    # df['hmm_per_kb'] = df['hmm_llh'] / (np.abs(df['sv_length']) / 1000 + 1)
+
     return df
 
 def add_overlap_count(df, chrom_col='chrom', start_col='start', end_col='end'):
@@ -135,23 +209,6 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
                          names=['chrom', 'start', 'end', 'sv_type', 'sv_length', 'genotype', 'read_depth', 'hmm_llh', 'aln_type', 'cluster_size', 'cn_state', 'aln_offset', 'id'],
                          dtype={'chrom': str, 'start': np.int32, 'end': np.int32, 'sv_type': str, 'sv_length': np.int32, 'genotype': str, 'read_depth': np.int32, 'hmm_llh': np.float32, 'aln_type': str, 'cluster_size': np.int32, 'cn_state': np.int32, 'aln_offset': np.int32, 'id': np.int32})
 
-    logging.info("[TEST1] columns in the BED file: %s", bed_df.columns)
-
-    # Print the range of cluster size.
-    # logging.info('Range of cluster size (pre-normalization): %f - %f', bed_df['cluster_size'].min(), bed_df['cluster_size'].max())
-    # # Print the range of read depth.
-    # logging.info('Range of read depth (pre-normalization): %f - %f', bed_df['read_depth'].min(), bed_df['read_depth'].max())
-
-    # # Normalize the read depth and cluster size columns (sample-dependent).
-    # bed_df['read_depth'] = (bed_df['read_depth'] - bed_df['read_depth'].mean()) / bed_df['read_depth'].std()
-    # bed_df['cluster_size'] = (bed_df['cluster_size'] - bed_df['cluster_size'].mean()) / bed_df['cluster_size'].std()
-    # logging.info('[TEST] Normalized the read depth and cluster size columns. Current columns: %s', bed_df.columns)
-
-    # # Print the range of cluster size.
-    # logging.info('Range of cluster size: %f - %f', bed_df['cluster_size'].min(), bed_df['cluster_size'].max())
-    # # Print the range of read depth.
-    # logging.info('Range of read depth: %f - %f', bed_df['read_depth'].min(), bed_df['read_depth'].max())
-
     # Drop the genotype column and cn_state columns (due to redundancy).
     bed_df.drop(columns=['genotype', 'cn_state'], inplace=True)
     logging.info('[TEST] Dropped the genotype and cn_state columns. Current columns: %s', bed_df.columns)
@@ -168,52 +225,66 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
     # Create a map of alignment types to numbers.
     # Alignment types are: "CIGARINS", "CIGARDEL", "CIGARCLIP", "SPLIT",
     # "SPLITDIST1", "SPLITDIST2", "SPLITINV", "SUPPINV", "HMM", "UNKNOWN"
-    aln_type_map = {
-        'CIGARINS': 0,
-        'CIGARDEL': 1,
-        'CIGARCLIP': 2,
-        'SPLIT': 3,
-        'SPLITDIST1': 4,
-        'SPLITDIST2': 5,
-        'SPLITINV': 6,
-        'SUPPINV': 7,
-        'HMM': 8,
-        'UNKNOWN': 9
-    }
+    # aln_type_map = {
+    #     'CIGARINS': 0,
+    #     'CIGARDEL': 1,
+    #     'CIGARCLIP': 2,
+    #     'SPLIT': 3,
+    #     'SPLITDIST1': 4,
+    #     'SPLITDIST2': 5,
+    #     'SPLITINV': 6,
+    #     'SUPPINV': 7,
+    #     'HMM': 8,
+    #     'UNKNOWN': 9
+    # }
 
     # The alignment types are comma-separated.
     # Split the alignment types into a list.
-    bed_df['aln_type'] = bed_df['aln_type'].str.split(',')
+    # bed_df['aln_type'] = bed_df['aln_type'].str.split(',')
 
     # Throw an error and exit if any contain more than two
     # alignment types.
-    if bed_df['aln_type'].apply(len).max() > 2:
-        logging.error('Alignment types contain more than two types.')
-        logging.error('Please check the input BED file.')
-        sys.exit(1)
-    else:
-        logging.info('Success: Alignment types contain at most two types.')
+    # if bed_df['aln_type'].apply(len).max() > 2:
+    #     logging.error('Alignment types contain more than two types.')
+    #     logging.error('Please check the input BED file.')
+    #     sys.exit(1)
+    # else:
+    #     logging.info('Success: Alignment types contain at most two types.')
+
+    # Create split alignment evidence feature, 0 for CIGAR alignment types (contains CIGAR) and 1
+    # for split alignment types (contains SPLIT, HMM, etc.).
+    # bed_df['split_aln'] = bed_df['aln_type'].apply(lambda x: 0 if 'CIGAR' in x else 1)
+    # logging.info('Created split_aln feature. Current columns: %s',
+    # bed_df.columns)
+    
+    # Create alignment type feature, 0 for CIGAR alignment types (contains
+    # CIGAR), 1 for CIGARCLIP (contains CIGARCLIP), 2 for SPLIT alignment (all
+    # others)
+    # bed_df['call_type'] = bed_df['aln_type'].apply(lambda x: 1 if 'CIGARCLIP' in x else (0 if 'CIGAR' in x else 2))
+
+    # Drop the original aln_type column.
+    bed_df.drop(columns=['aln_type'], inplace=True)
 
     # Create a second column with whether one of the alignment types is HMM.
-    bed_df['aln_type_hmm'] = bed_df['aln_type'].apply(lambda x: 1 if 'HMM' in x else 0)
+    # bed_df['aln_type_hmm'] = bed_df['aln_type'].apply(lambda x: 1 if 'HMM' in x else 0)
 
-    # Replace the alignment type to have only one type by removing the HMM type.
-    bed_df['aln_type'] = bed_df['aln_type'].apply(lambda x: [i for i in x if i != 'HMM'])
+    # # Replace the alignment type to have only one type by removing the HMM type.
+    # bed_df['aln_type'] = bed_df['aln_type'].apply(lambda x: [i for i in x if i != 'HMM'])
 
-    # Now all the alignment types should be just one type. Print an error if
-    # not and exit.
-    if bed_df['aln_type'].apply(len).max() > 1:
-        logging.error('Alignment types contain more than one type.')
-        logging.error('Please check the input BED file.')
-        sys.exit(1)
-    else:
-        logging.info('Success: Alignment types contain only one type.')
+    # # Now all the alignment types should be just one type. Print an error if
+    # # not and exit.
+    # if bed_df['aln_type'].apply(len).max() > 1:
+    #     logging.error('Alignment types contain more than one type.')
+    #     logging.error('Please check the input BED file.')
+    #     sys.exit(1)
+    # else:
+    #     logging.info('Success: Alignment types contain only one type.')
 
-    # Flatten the list of alignment types into a single string.
-    bed_df['aln_type'] = bed_df['aln_type'].apply(lambda x: x[0])
+    # # Flatten the list of alignment types into a single string.
+    # bed_df['aln_type'] = bed_df['aln_type'].apply(lambda x: x[0])
 
-    # Map the alignment types to numbers.
-    bed_df['aln_type'] = bed_df['aln_type'].map(aln_type_map)
+    # # Map the alignment types to numbers.
+    # bed_df['aln_type'] = bed_df['aln_type'].map(aln_type_map)
 
     # Create a one-hot encoding for the alignment types by creating a new column for each type.
     # for aln_type in aln_type_map.keys():
@@ -239,6 +310,8 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
         'BND': 4,
         'UNKNOWN': 5
     }
+
+    bed_df['sv_type_str'] = bed_df['sv_type'].astype(str)
 
     # Map the SV types to numbers.
     bed_df['sv_type'] = bed_df['sv_type'].map(sv_type_map)
@@ -322,8 +395,11 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
     # # Training data has size imbalance, so use the transformed sv_length
     # bed_df.drop(columns=['sv_length'], inplace=True)
 
-    # # Drop the alignment type column (imbalanced).
+    # Drop the alignment type column (imbalanced).
     # bed_df.drop(columns=['aln_type'], inplace=True)
+
+    # # Drop the HMM prediction column (not available for all samples).
+    # bed_df.drop(columns=['aln_type_hmm'], inplace=True)
 
     # Drop cluster size and cs_per_kb
     # bed_df.drop(columns=['cluster_size'], inplace=True)  # Dropped after normalization in train_full_model.py
@@ -337,23 +413,16 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
     # Print the number of NaN values
     logging.info('Number of NaN values: %d', bed_df.isnull().sum().sum())
 
-    # Map the chromosome names to numbers.
-    # bed_df['chrom'] = bed_df['chrom'].map(chrom_dict)
-
-    # # Actually drop the chrom, start, end columns.
-    # bed_df.drop(columns=['chrom', 'start', 'end'], inplace=True)
-
+    # -------------------------------------------------------------------
     # Fix the chromosome names to all start with 'chr' if they don't already.
     bed_df['chrom'] = bed_df['chrom'].apply(lambda x: 'chr' + x if not x.startswith('chr') else x)
 
     # Drop the start and end columns, but keep the chrom column for later use in
     # cross-validation.
-    bed_df.drop(columns=['start', 'end'], inplace=True)
+    # bed_df.drop(columns=['start', 'end'], inplace=True)
 
     # Drop telomere and centromere columns (they don't affect predictions).
     bed_df.drop(columns=['telomere', 'centromere'], inplace=True)
-
-    logging.info('[TEST] Dropped the chrom, start, end columns. Final columns (TP): %s', bed_df.columns)
 
     # Return the features.
     return bed_df
@@ -693,19 +762,9 @@ def add_annotations(data, input_bed, annovar_path, db_path, anno_outdir, buildve
             logging.warning('Score= not found in the string: %s', score_str)
             return 0
         return float(score) if score else 0
-    
-    # Extract the maximum score from the segmental duplication annotations.
-    # data['segdup'] = extract_max_score(data['genomicSuperDups'])
-
-    # # Print the first 20 values of the segdup column.
-    # logging.info('First 20 values of the segdup column: %s', data['segdup'].head(20))
 
     # Extract the segmental duplication scores.
-    # test_scores = data['genomicSuperDups'].apply(extract_scores)
     data['segdup'] = data['genomicSuperDups'].apply(extract_scores)
-
-    # Print the first 20 values of the test_scores column.
-    # logging.info('First 20 values of the updated segdup column: %s', data['segdup'].head(20))
 
     # Extract the cytoband annotations.
     def get_cyto_info(row):

@@ -230,23 +230,49 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
     # sys.exit(0)
 
     # Combine the true positive and false positive data.
-    data = pd.concat([tp_data, fp_data])
+    data = pd.concat([tp_data, fp_data], ignore_index=True)  # Ignore the index to realign the indices.
+
+    # Add interaction terms to the data.
+    data = add_interaction_terms(data)
 
     # Drop the chromosome column from the data.
-    data.drop(columns=['chrom'], inplace=True)
+    # data.drop(columns=['chrom'], inplace=True)
+
+    # Drop the chrom, start, end, sv_length, read_depth, and cluster_size
+    # columns
+    # logging.info('Dropping the chrom, start, end, sv_length, read_depth, and cluster_size columns from the data.')
+    # data.drop(columns=['chrom', 'start', 'end', 'sv_length', 'read_depth',
+    # 'cluster_size', 'sv_type_str'], inplace=True)
+    data.drop(columns=['chrom', 'start', 'end', 'sv_type_str'], inplace=True)
+
+    # Drop the SV type column (imbalance especially for inversions).
+    # logging.info('Dropping the sv_type column from the data.')
+    # data.drop(columns=['sv_type'], inplace=True)
 
     # Normalize cluster_size and read_depth
     # data = normalize_column(data, 'cluster_size')
     # data = normalize_column(data, 'read_depth')
 
-    # Add interaction terms to the data.
-    data = add_interaction_terms(data)
+    # Drop cluster_size
+    # data.drop(columns=['cluster_size'], inplace=True)
 
-    # Drop the SV length column
-    data.drop(columns=['sv_length'], inplace=True)
+    # # Drop the SV length column
+    # data.drop(columns=['sv_length'], inplace=True)
+
+    # Drop the read_depth and cluster_size columns
+    data.drop(columns=['read_depth', 'cluster_size'], inplace=True)
+
+    # Drop the hmm log likelihood column
+    # data.drop(columns=['hmm_llh'], inplace=True)
 
     # Drop the SV length and aln_type columns.
     # data.drop(columns=['sv_length', 'aln_type'], inplace=True)
+
+    logging.info('Columns list after preprocessing: %s', data.columns.tolist())
+
+    # Print duplicate columns if any.
+    duplicate_columns = data.columns[data.columns.duplicated()].tolist()
+    logging.info('Duplicate columns found: %s', duplicate_columns)
 
     # Get the features and labels.
     features = data.drop(columns=['label'])
@@ -269,6 +295,23 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
     X_train, X_test, y_train, y_test = train_test_split(features, labels, test_size=0.2, random_state=42)
     logging.info('Data split completed. Training set size: %d, Testing set size: %d',
                  X_train.shape[0], X_test.shape[0])
+
+    # Compute sample weights based on SV length.
+    # svlen_weights = np.log1p(np.abs(X_train['sv_length']))
+    # svlen_weights = np.log1p(np.abs(X_train['sv_length'])) ** 2  # Square the
+    # weights to emphasize larger SV lengths.
+    conf = np.clip(np.exp(X_train['hmm_llh'] / 1000), 1e-6, 1)
+    # Replace NaN values in conf with 1.0
+    conf = conf.fillna(1.0)
+    svlen = np.log1p(np.abs(X_train['sv_length']) + 1e-6)  # Add a small value to avoid log(0)
+    svlen_weights = conf * svlen
+
+    # Split the data into 1/2 >10kb abs(sv_length) and 1/2 <10kb abs(sv_length),
+    # then train the model with 80% of the data and test with 20% of the data.
+    # logging.info('Splitting the data by size of SVs (1/2 >10kb abs(sv_length) and 1/2 <10kb abs(sv_length)).')
+    # large_sv_mask = features['sv_length'].abs() > 10000
+    # small_sv_mask = features['sv_length'].abs() <= 10000
+    
     
     # # Drop the chromosome column from the features.
     # X_train.drop(columns=['chrom'], inplace=True)
@@ -336,6 +379,7 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
         logging.info('Training the %s model.', model_name)
         # model.fit(features, labels)
         model.fit(X_train, y_train)
+        # model.fit(X_train, y_train, sample_weight=svlen_weights)
 
         # Get predicted probabilities for the training and testing sets.
         y_train_prob = model.predict_proba(X_train)[:, 1]
@@ -548,27 +592,27 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
             # sys.exit(0)
 
             # Convert bool columns to int for SHAP analysis.
-            bool_cols = X_train.select_dtypes(include=['bool']).columns
-            X_train[bool_cols] = X_train[bool_cols].astype(int)
+            # bool_cols = X_train.select_dtypes(include=['bool']).columns
+            # X_train[bool_cols] = X_train[bool_cols].astype(int)
 
             # Figure out which column has dtype object in X_train.
-            print("X_train dtypes:")
-            print(X_train.dtypes)
-            print("X_train columns:")
-            print(X_train.columns)
+            # print("X_train dtypes:")
+            # print(X_train.dtypes)
+            # print("X_train columns:")
+            # print(X_train.columns)
 
             # Analyze the feature importances using SHAP values.
-            import shap
-            explainer = shap.Explainer(model, X_train)
-            shap_values = explainer(X_train)
-            # Plot the SHAP values.
-            plt.figure(figsize=(10, 6))
-            shap.summary_plot(shap_values, X_train, feature_names=feature_names, show=False)
-            # Save the SHAP summary plot to the output directory.
-            shap_plot_path = os.path.join(output_directory, model_name_fp + '_shap_summary_plot.png')
-            plt.savefig(shap_plot_path, bbox_inches='tight')
-            plt.close()
-            logging.info('Saved the SHAP summary plot to %s', shap_plot_path)
+            # import shap
+            # explainer = shap.Explainer(model, X_train)
+            # shap_values = explainer(X_train)
+            # # Plot the SHAP values.
+            # plt.figure(figsize=(10, 6))
+            # shap.summary_plot(shap_values, X_train, feature_names=feature_names, show=False)
+            # # Save the SHAP summary plot to the output directory.
+            # shap_plot_path = os.path.join(output_directory, model_name_fp + '_shap_summary_plot.png')
+            # plt.savefig(shap_plot_path, bbox_inches='tight')
+            # plt.close()
+            # logging.info('Saved the SHAP summary plot to %s', shap_plot_path)
 
             # -----------------------------------------------
             # SV Length vs SHAP values
