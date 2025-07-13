@@ -286,7 +286,7 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
     models = {
         "Logistic Regression": LogisticRegression(),
         "Random_Forest": RandomForestClassifier(n_estimators=100, random_state=42),
-        "XGBoost": XGBClassifier(use_label_encoder=False, eval_metric='logloss'),
+        "XGBoost": XGBClassifier(use_label_encoder=False, eval_metric='logloss', enable_categorical=True),
         "SVC": SVC(kernel='linear', class_weight='balanced', probability=True)
     }
 
@@ -300,11 +300,32 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
     # svlen_weights = np.log1p(np.abs(X_train['sv_length']))
     # svlen_weights = np.log1p(np.abs(X_train['sv_length'])) ** 2  # Square the
     # weights to emphasize larger SV lengths.
-    conf = np.clip(np.exp(X_train['hmm_llh'] / 1000), 1e-6, 1)
-    # Replace NaN values in conf with 1.0
-    conf = conf.fillna(1.0)
-    svlen = np.log1p(np.abs(X_train['sv_length']) + 1e-6)  # Add a small value to avoid log(0)
-    svlen_weights = conf * svlen
+    # conf = np.clip(np.exp(X_train['hmm_llh'] / 1000), 1e-6, 1)
+    # # Replace NaN values in conf with 1.0
+    # conf = conf.fillna(1.0)
+    # svlen = np.log1p(np.abs(X_train['sv_length']) + 1e-6)  # Add a small value to avoid log(0)
+    # svlen_weights = conf * svlen
+
+    #     sv_type_map = {
+    #     'DEL': 0,
+    #     'DUP': 1,
+    #     'INV': 2,
+    #     'INS': 3,
+    #     'BND': 4,
+    #     'UNKNOWN': 5
+    # }
+    # Weights based on the SV type (weight inversions more heavily since they are
+    # less common in the dataset).
+    sv_type_weights = {
+        0: 1.0,  # DEL
+        1: 1.0,  # DUP
+        2: 5.0,  # INV
+        3: 1.0,  # INS
+        4: 1.0,  # BND
+        5: 1.0   # UNKNOWN
+    }
+    # Create a sample weight array based on the SV type.
+    # sample_weights = np.array([sv_type_weights.get(sv_type, 1.0) for sv_type in X_train['sv_type']])
 
     # Split the data into 1/2 >10kb abs(sv_length) and 1/2 <10kb abs(sv_length),
     # then train the model with 80% of the data and test with 20% of the data.
@@ -324,11 +345,16 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
     # logging.info('Feature names: %s', feature_names)
 
     for model_name, model in models.items():
+        model_name_fp = model_name.replace(" ", "_")
 
-        # Skip SVC
+        # Skip SVC and logistic regression for now.
         if model_name == "SVC":
             logging.info('Skipping SVC model.')
             continue
+
+        # if model_name == "Logistic Regression":
+        #     logging.info('Skipping Logistic Regression model.')
+        #     continue
 
         # Skip all but XGBoost
         if model_name != "XGBoost":
@@ -379,7 +405,7 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
         logging.info('Training the %s model.', model_name)
         # model.fit(features, labels)
         model.fit(X_train, y_train)
-        # model.fit(X_train, y_train, sample_weight=svlen_weights)
+        # model.fit(X_train, y_train, sample_weight=sample_weights)
 
         # Get predicted probabilities for the training and testing sets.
         y_train_prob = model.predict_proba(X_train)[:, 1]
@@ -394,107 +420,88 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
         roc_auc_test = auc(fpr_test, tpr_test)
 
         # Use Youden's J statistic to find the optimal threshold.
-        j_scores = tpr_test - fpr_test
-        optimal_idx = np.argmax(j_scores)
-        optimal_threshold = thresholds[optimal_idx]
-        logging.info('Optimal threshold (Youden\'s J statistic): %f', optimal_threshold)
-        logging.info('True positive rate (sensitivity): %f', tpr_test[optimal_idx])
-        logging.info('False positive rate (1 - specificity): %f', fpr_test[optimal_idx])
+        # j_scores = tpr_test - fpr_test
+        # optimal_idx = np.argmax(j_scores)
+        # optimal_threshold = thresholds[optimal_idx]
+        # logging.info('Optimal threshold (Youden\'s J statistic): %f', optimal_threshold)
+        # logging.info('True positive rate (sensitivity): %f', tpr_test[optimal_idx])
+        # logging.info('False positive rate (1 - specificity): %f', fpr_test[optimal_idx])
 
         # Print the ROC AUC scores.
         logging.info('ROC AUC score for the training set: %f', roc_auc_train)
         logging.info('ROC AUC score for the testing set: %f', roc_auc_test)
 
-        # Plot the ROC curve for the training set.
-        plt.figure()
-        plt.plot(fpr_train, tpr_train, color='blue', lw=2, label='ROC curve (area = %0.2f)' % roc_auc_train)
-        # plt.plot(fpr, tpr, color='darkorange', lw=2, label='ROC curve (area = %0.2f)' % roc_auc)
-        plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
-        plt.xlim([0.0, 1.0])
-        plt.ylim([0.0, 1.05])
-        plt.xlabel('False Positive Rate')
-        plt.ylabel('True Positive Rate')
-        plt.title('{} Receiver Operating Characteristic (Training Set)'.format(model_name))
-        plt.legend(loc='lower right')
-        # Save the plot to the output directory.
-        model_name_fp = model_name.replace(" ", "_")
-        roc_plot_path = os.path.join(output_directory, model_name_fp + '_roc_curve.png')
-        plt.savefig(roc_plot_path)
-        plt.close()
-        logging.info('Saved the ROC curve to %s', roc_plot_path)
+        # # Plot the ROC curve for the training set.
+        # plt.figure()
+        # plt.plot(fpr_train, tpr_train, color='blue', lw=2, label='ROC curve (area = %0.2f)' % roc_auc_train)
+        # # plt.plot(fpr, tpr, color='darkorange', lw=2, label='ROC curve (area = %0.2f)' % roc_auc)
+        # plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+        # plt.xlim([0.0, 1.0])
+        # plt.ylim([0.0, 1.05])
+        # plt.xlabel('False Positive Rate')
+        # plt.ylabel('True Positive Rate')
+        # plt.title('{} Receiver Operating Characteristic (Training Set)'.format(model_name))
+        # plt.legend(loc='lower right')
+        # # Save the plot to the output directory.
+        # roc_plot_path = os.path.join(output_directory, model_name_fp + '_roc_curve.png')
+        # plt.savefig(roc_plot_path)
+        # plt.close()
+        # logging.info('Saved the ROC curve to %s', roc_plot_path)
 
-        # Plot the ROC curve for the testing set.
-        plt.figure()
-        plt.plot(fpr_test, tpr_test, color='blue', lw=2, label='ROC curve (area = %0.2f)' % roc_auc_test)
-        plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
-        plt.xlim([0.0, 1.0])
-        plt.ylim([0.0, 1.05])
-        plt.xlabel('False Positive Rate')
-        plt.ylabel('True Positive Rate')
-        plt.title('{} Receiver Operating Characteristic (Testing Set)'.format(model_name_fp))
-        plt.legend(loc='lower right')
-        # Save the plot to the output directory.
-        roc_plot_path = os.path.join(output_directory, model_name + '_roc_curve_test.png')
-        plt.savefig(roc_plot_path)
-        plt.close()
-        logging.info('Saved the ROC curve to %s', roc_plot_path)
+        # # Plot the ROC curve for the testing set.
+        # plt.figure()
+        # plt.plot(fpr_test, tpr_test, color='blue', lw=2, label='ROC curve (area = %0.2f)' % roc_auc_test)
+        # plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+        # plt.xlim([0.0, 1.0])
+        # plt.ylim([0.0, 1.05])
+        # plt.xlabel('False Positive Rate')
+        # plt.ylabel('True Positive Rate')
+        # plt.title('{} Receiver Operating Characteristic (Testing Set)'.format(model_name_fp))
+        # plt.legend(loc='lower right')
+        # # Save the plot to the output directory.
+        # roc_plot_path = os.path.join(output_directory, model_name + '_roc_curve_test.png')
+        # plt.savefig(roc_plot_path)
+        # plt.close()
+        # logging.info('Saved the ROC curve to %s', roc_plot_path)
 
         # Compute precision-recall curve
-        precision, recall, thresholds_pr = precision_recall_curve(y_test, y_test_prob)
+        # precision, recall, thresholds_pr = precision_recall_curve(y_test, y_test_prob)
 
-        logging.info('precision size: %d', len(precision))
-        logging.info('recall size: %d', len(recall))
-        logging.info('thresholds size: %d', len(thresholds_pr))
+        # logging.info('precision size: %d', len(precision))
+        # logging.info('recall size: %d', len(recall))
+        # logging.info('thresholds size: %d', len(thresholds_pr))
 
-        # Plot Recall vs Thresholds
-        plt.figure()
-        plt.plot(thresholds_pr, recall[1:], color='blue', lw=2, label='Recall')
-        plt.xlabel('Threshold')
-        plt.ylabel('Recall')
-        plt.title('%s Recall vs Thresholds' % model_name)
-        # plt.legend(loc='lower right')
+        # # Plot Recall vs Thresholds
+        # plt.figure()
+        # plt.plot(thresholds_pr, recall[1:], color='blue', lw=2, label='Recall')
+        # plt.xlabel('Threshold')
+        # plt.ylabel('Recall')
+        # plt.title('%s Recall vs Thresholds' % model_name)
+        # # plt.legend(loc='lower right')
 
-        # Remove the legend
-        plt.legend().remove()
+        # # Remove the legend
+        # plt.legend().remove()
 
-        # Save the plot to the output directory.
-        recall_plot_path = os.path.join(output_directory, model_name_fp + '_recall_vs_thresholds.png')
-        plt.savefig(recall_plot_path)
-        plt.close()
-        logging.info('Saved the Recall vs Thresholds plot to %s', recall_plot_path)
+        # # Save the plot to the output directory.
+        # recall_plot_path = os.path.join(output_directory, model_name_fp + '_recall_vs_thresholds.png')
+        # plt.savefig(recall_plot_path)
+        # plt.close()
+        # logging.info('Saved the Recall vs Thresholds plot to %s', recall_plot_path)
 
-        # Plot Precision vs Thresholds
-        plt.figure()
-        plt.plot(thresholds_pr, precision[1:], color='blue', lw=2, label='Precision')
-        plt.xlabel('Threshold')
-        plt.ylabel('Precision')
-        plt.title('%s Precision vs Thresholds' % model_name)
-        # plt.legend(loc='lower right')
-        # Remove the legend
-        plt.legend().remove()
-        # Save the plot to the output directory.
-        precision_plot_path = os.path.join(output_directory, model_name_fp + '_precision_vs_thresholds.png')
-        plt.savefig(precision_plot_path)
-        plt.close()
-        logging.info('Saved the Precision vs Thresholds plot to %s', precision_plot_path)
-
-        # # Find the threshold that gives the highest precision (ideally with
-        # # recall > 0) or where precision == 1.0 (0 false positives).
-        # precision_1_indices = np.where(precision[:-1] == 1.0)[0]
-        # if len(precision_1_indices) > 0:
-        #     # If there are indices where precision == 1.0, use the one with the
-        #     # highest recall.
-        #     optimal_index = precision_1_indices[np.argmax(recall[precision_1_indices])]
-        #     optimal_threshold_pr = thresholds_pr[optimal_index]
-        #     logging.info('Optimal threshold (highest precision = 1.0): %f with recall %f',
-        #                 optimal_threshold_pr, recall[optimal_index])
-        # else:
-        #     # If no indices where precision == 1.0, use the one with the highest
-        #     # precision.
-        #     optimal_index = np.argmax(precision[:-1])
-        #     optimal_threshold_pr = thresholds_pr[optimal_index]
-        #     logging.info('Optimal threshold (highest precision = %f): %f with recall %f',
-        #                 optimal_threshold_pr, precision[optimal_index], recall[optimal_index])
+        # # Plot Precision vs Thresholds
+        # plt.figure()
+        # plt.plot(thresholds_pr, precision[1:], color='blue', lw=2, label='Precision')
+        # plt.xlabel('Threshold')
+        # plt.ylabel('Precision')
+        # plt.title('%s Precision vs Thresholds' % model_name)
+        # # plt.legend(loc='lower right')
+        # # Remove the legend
+        # plt.legend().remove()
+        # # Save the plot to the output directory.
+        # precision_plot_path = os.path.join(output_directory, model_name_fp + '_precision_vs_thresholds.png')
+        # plt.savefig(precision_plot_path)
+        # plt.close()
+        # logging.info('Saved the Precision vs Thresholds plot to %s', precision_plot_path)
 
         # Get the feature names.
         feature_names = features.columns.tolist()

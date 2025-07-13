@@ -259,10 +259,10 @@ def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Dist
     # prob_threshold = 0.05
 
     # Engineering feature interaction terms
-    # prob_threshold = 0.01  # Too high SV counts
+    prob_threshold = 0.01
     # prob_threshold = 0.1
     # prob_threshold = 0.3  # Lowered recall
-    prob_threshold = 0.2
+    # prob_threshold = 0.2
     # prob_threshold = 0.02  # Too many SVs
     # prob_threshold = 0.01
 

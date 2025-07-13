@@ -88,8 +88,11 @@ def add_interaction_terms(df):
     # Cap hmm log likelihood to avoid extreme values.
     df['hmm_llh'] = np.clip(df['hmm_llh'], -1e6, 0)
 
+    # Print the number of NaN values in the hmm_llh column.
+    logging.info("Number of NaN values in hmm_llh column: %d", df['hmm_llh'].isna().sum())
+
     # Boolean for whether the SV is an inversion (INV).
-    df['is_inv'] = df['sv_type'].apply(lambda x: 1 if x == 2 else 0)  # Assuming 2 is INV
+    # df['is_inv'] = df['sv_type'].apply(lambda x: 1 if x == 2 else 0)  # Assuming 2 is INV
 
     # SV length interaction terms
     # df['svlenkb_cs'] = np.abs(df['sv_length']) / 1000 * df['cluster_size']
@@ -106,8 +109,11 @@ def add_interaction_terms(df):
     # Segdup * HMM llh interaction term
     # df['segdup_hmm'] = df['segdup'] * df['hmm_llh']
 
-    # Segdup * cs/rd interaction terms
+    # Segdup * cs/rd interaction term
     df['segdup_cs_rd'] = df['segdup'] * df['cs_rd']
+
+    # Simple repeat * cs/rd interaction terfm
+    # df['simple_repeat_cs_rd'] = df['simpleRepeat'] * df['cs_rd']
 
     # Segdup * sv_length interaction term
     # df['segdup_svlen'] = df['segdup'] * np.abs(df['sv_length'])
@@ -117,6 +123,12 @@ def add_interaction_terms(df):
 
     # Drop the segdup column
     df.drop(columns=['segdup'], inplace=True)
+
+    # Drop the simple_repeat column
+    # df.drop(columns=['simpleRepeat'], inplace=True)
+
+    # Drop sv_type
+    df.drop(columns=['sv_type'], inplace=True)
     
     # ---
     # Cluster size per kb
@@ -314,7 +326,14 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
     bed_df['sv_type_str'] = bed_df['sv_type'].astype(str)
 
     # Map the SV types to numbers.
-    bed_df['sv_type'] = bed_df['sv_type'].map(sv_type_map)
+    bed_df['sv_type'] = bed_df['sv_type'].map(sv_type_map).astype('category')
+
+    # Create a one-hot encoding for the SV types by creating a new column for each type.
+    # for sv_type in sv_type_map.keys():
+    #     bed_df[sv_type] = bed_df['sv_type'].apply(lambda x: 1 if x == sv_type else 0)
+
+    # Drop the original sv_type column.
+    # bed_df.drop(columns=['sv_type'], inplace=True)
 
     # Print the number of NaN values
     logging.info('Number of NaN values after sv_type mapping: %d', bed_df.isnull().sum().sum())
