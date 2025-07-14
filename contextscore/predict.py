@@ -299,9 +299,7 @@ def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Dist
     
     logging.info('Creating a CSV file with the filtered variants...')
     import shap
-    explainer = shap.TreeExplainer(clf)
-    shap_values = explainer.shap_values(feature_df)
-    shap_df = pd.DataFrame(shap_values, columns=feature_df.columns)
+    shap_df = pd.DataFrame()
     shap_df['id'] = id_col.values
     shap_df['chrom'] = chrom_col.values
     shap_df['start'] = start_col.values
@@ -311,9 +309,17 @@ def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Dist
     shap_df['sv_length'] = feature_df['sv_length'].values  # Use the original sv_length from feature_df
     shap_df['read_depth'] = read_depth_col.values
     shap_df['cluster_size'] = cluster_size_col.values
-    
     shap_df['predicted_probability'] = y_pred[:, 1]
     shap_df['predicted_class'] = (y_pred[:, 1] >= prob_threshold).astype(int)
+
+    # Calculate SHAP values
+    explainer = shap.TreeExplainer(clf)
+    shap_values = explainer.shap_values(feature_df)
+    shap_df_shap = pd.DataFrame(shap_values, columns=feature_df.columns)
+
+    # Combine the SHAP values with the filtered variants DataFrame
+    shap_df = pd.concat([shap_df, shap_df_shap], axis=1)
+
     # for col in shap_df.columns:
     #     if col not in ['id', 'chrom', 'predicted_probability', 'predicted_class']:
     #         shap_df[col] = shap_df[col].astype(float)
@@ -325,10 +331,10 @@ def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Dist
     logging.info('Saving the filtered variant SHAP values to a CSV file...')
 
     # Move the CHROM, START, END, SVTYPE, SVLEN, READ_DEPTH, CLUSTER_SIZE, PREDICTED_PROBABILITY, PREDICTED_CLASS columns to the front
-    shap_df = shap_df[['chrom', 'id', 'start', 'end', 'sv_type_str', 'sv_length', 'read_depth', 'cluster_size',
-                       'predicted_probability', 'predicted_class'] + 
-                       [col for col in shap_df.columns if col not in ['chrom', 'id', 'start', 'end', 'sv_type_str', 'sv_length', 'read_depth', 'cluster_size', 'predicted_probability', 'predicted_class']]]
-    # shap_df = shap_df[['chrom', 'id', 'predicted_probability', 'predicted_class'] + [col for col in shap_df.columns if col not in ['chrom', 'id', 'predicted_probability', 'predicted_class']]]
+    # shap_df = shap_df[['chrom', 'id', 'start', 'end', 'sv_type_str', 'sv_length', 'read_depth', 'cluster_size',
+    #                    'predicted_probability', 'predicted_class'] + 
+    #                    [col for col in shap_df.columns if col not in ['chrom', 'id', 'start', 'end', 'sv_type_str', 'sv_length', 'read_depth', 'cluster_size', 'predicted_probability', 'predicted_class']]]
+    # # shap_df = shap_df[['chrom', 'id', 'predicted_probability', 'predicted_class'] + [col for col in shap_df.columns if col not in ['chrom', 'id', 'predicted_probability', 'predicted_class']]]
 
     shap_csv_file = os.path.join(output_dir, 'filtered_variants.csv')
     shap_df.to_csv(shap_csv_file, index=False)

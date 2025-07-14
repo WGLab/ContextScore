@@ -64,6 +64,11 @@ def normalize_column(df, column):
 
 def add_interaction_terms(df):
     """Add interaction terms to the dataframe."""
+
+    # Replace cluster_size with log transformed values to reduce the range.
+    df['log_cs'] = np.log1p(np.abs(df['cluster_size']))
+
+    df['log_rd'] = np.log1p(np.abs(df['read_depth']))
     # Log-transform the sv_length column to reduce the range.
     # df['log_svlen'] = np.log1p(np.abs(df['sv_length']))
 
@@ -79,14 +84,15 @@ def add_interaction_terms(df):
     # df['is_cnv_hmm'] = df['is_cnv_hmm'] & (df['hmm_llh'] != 0)
 
     # Update hmm_llh, set 0 to np.nan
-    df['hmm_llh_missing'] = (df['hmm_llh'] == 0).astype(int)
+    # df['hmm_llh_missing'] = (df['hmm_llh'] == 0).astype(int)
     df['hmm_llh'] = df['hmm_llh'].replace(0, np.nan)
 
     # Replace hmm_llh with likelihood
     # df['hmm_llh'] = np.clip(np.exp(df['hmm_llh']), 1e-6, 0.999999)
 
     # Cap hmm log likelihood to avoid extreme values.
-    df['hmm_llh'] = np.clip(df['hmm_llh'], -1e6, 0)
+    # df['hmm_llh'] = np.clip(df['hmm_llh'], -1e6, 0)
+    df['hmm_llh'] = np.clip(df['hmm_llh'], -50, 0)
 
     # Print the number of NaN values in the hmm_llh column.
     logging.info("Number of NaN values in hmm_llh column: %d", df['hmm_llh'].isna().sum())
@@ -104,13 +110,13 @@ def add_interaction_terms(df):
     # df['hmm_llh_per_kb'] = df['hmm_llh_scaled'] / (np.abs(df['sv_length']) / 1000 + 1e-6)
 
     # Cluster size / read depth interaction terms
-    df['cs_rd'] = df['cluster_size'] / (df['read_depth'] + 1e-6)
+    # df['cs_rd'] = df['cluster_size'] / (df['read_depth'] + 1e-6)
 
     # Segdup * HMM llh interaction term
     # df['segdup_hmm'] = df['segdup'] * df['hmm_llh']
 
     # Segdup * cs/rd interaction term
-    df['segdup_cs_rd'] = df['segdup'] * df['cs_rd']
+    # df['segdup_cs_rd'] = df['segdup'] * df['cs_rd']
 
     # Simple repeat * cs/rd interaction terfm
     # df['simple_repeat_cs_rd'] = df['simpleRepeat'] * df['cs_rd']
@@ -121,14 +127,41 @@ def add_interaction_terms(df):
     # Replace nans in segdup_hmm with 0
     # df['segdup_hmm'] = df['segdup_hmm'].fillna(0)
 
+    # Segdup * cs
+    df['segdup_cs'] = df['segdup'] * df['log_cs']
+
+    # Segdup * rd
+    df['segdup_rd'] = df['segdup'] * df['log_rd']
+
+    # Simple repeat * cs
+    df['simple_repeat_cs'] = df['simpleRepeat'] * df['log_cs']
+
+    # Simple repeat * rd
+    df['simple_repeat_rd'] = df['simpleRepeat'] * df['log_rd']
+
+    # Fragile site * cs
+    df['fragile_site_cs'] = df['fragile_site'] * df['log_cs']
+
+    # Fragile site * rd
+    df['fragile_site_rd'] = df['fragile_site'] * df['log_rd']
+
     # Drop the segdup column
     df.drop(columns=['segdup'], inplace=True)
+
+    # Drop the simple_repeat column
+    df.drop(columns=['simpleRepeat'], inplace=True)
+
+    # Drop the fragile_site column
+    df.drop(columns=['fragile_site'], inplace=True)
+
+    # Drop cluster_size
+    # df.drop(columns=['cluster_size'], inplace=True)
 
     # Drop the simple_repeat column
     # df.drop(columns=['simpleRepeat'], inplace=True)
 
     # Drop sv_type
-    df.drop(columns=['sv_type'], inplace=True)
+    # df.drop(columns=['sv_type'], inplace=True)
     
     # ---
     # Cluster size per kb
