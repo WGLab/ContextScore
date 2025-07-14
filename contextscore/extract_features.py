@@ -66,9 +66,9 @@ def add_interaction_terms(df):
     """Add interaction terms to the dataframe."""
 
     # Replace cluster_size with log transformed values to reduce the range.
-    df['log_cs'] = np.log1p(np.abs(df['cluster_size']))
+    # df['log_cs'] = np.log1p(np.abs(df['cluster_size']))
 
-    df['log_rd'] = np.log1p(np.abs(df['read_depth']))
+    # df['log_rd'] = np.log1p(np.abs(df['read_depth']))
     # Log-transform the sv_length column to reduce the range.
     # df['log_svlen'] = np.log1p(np.abs(df['sv_length']))
 
@@ -83,19 +83,12 @@ def add_interaction_terms(df):
     # df['is_cnv_hmm'] = df['sv_type'].apply(lambda x: 1 if x in [0, 1] else 0)  # Assuming 0 is DEL and 1 is DUP
     # df['is_cnv_hmm'] = df['is_cnv_hmm'] & (df['hmm_llh'] != 0)
 
-    # Update hmm_llh, set 0 to np.nan
-    # df['hmm_llh_missing'] = (df['hmm_llh'] == 0).astype(int)
-    df['hmm_llh'] = df['hmm_llh'].replace(0, np.nan)
+    # Cluster size * hmm_llh interaction term
+    df['cs_hmm'] = df['cluster_size'] * df['hmm_llh']
 
     # Replace hmm_llh with likelihood
     # df['hmm_llh'] = np.clip(np.exp(df['hmm_llh']), 1e-6, 0.999999)
 
-    # Cap hmm log likelihood to avoid extreme values.
-    # df['hmm_llh'] = np.clip(df['hmm_llh'], -1e6, 0)
-    df['hmm_llh'] = np.clip(df['hmm_llh'], -50, 0)
-
-    # Print the number of NaN values in the hmm_llh column.
-    logging.info("Number of NaN values in hmm_llh column: %d", df['hmm_llh'].isna().sum())
 
     # Boolean for whether the SV is an inversion (INV).
     # df['is_inv'] = df['sv_type'].apply(lambda x: 1 if x == 2 else 0)  # Assuming 2 is INV
@@ -128,31 +121,31 @@ def add_interaction_terms(df):
     # df['segdup_hmm'] = df['segdup_hmm'].fillna(0)
 
     # Segdup * cs
-    df['segdup_cs'] = df['segdup'] * df['log_cs']
+    df['segdup_cs'] = df['segdup'] * df['cluster_size']
 
     # Segdup * rd
-    df['segdup_rd'] = df['segdup'] * df['log_rd']
+    df['segdup_rd'] = df['segdup'] * df['read_depth']
 
     # Simple repeat * cs
-    df['simple_repeat_cs'] = df['simpleRepeat'] * df['log_cs']
+    df['simple_repeat_cs'] = df['simpleRepeat'] * df['cluster_size']
 
     # Simple repeat * rd
-    df['simple_repeat_rd'] = df['simpleRepeat'] * df['log_rd']
+    df['simple_repeat_rd'] = df['simpleRepeat'] * df['read_depth']
 
     # Fragile site * cs
-    df['fragile_site_cs'] = df['fragile_site'] * df['log_cs']
+    df['fragile_site_cs'] = df['fragile_site'] * df['cluster_size']
 
     # Fragile site * rd
-    df['fragile_site_rd'] = df['fragile_site'] * df['log_rd']
+    df['fragile_site_rd'] = df['fragile_site'] * df['read_depth']
 
     # Drop the segdup column
-    df.drop(columns=['segdup'], inplace=True)
+    # df.drop(columns=['segdup'], inplace=True)
 
-    # Drop the simple_repeat column
-    df.drop(columns=['simpleRepeat'], inplace=True)
+    # # Drop the simple_repeat column
+    # df.drop(columns=['simpleRepeat'], inplace=True)
 
-    # Drop the fragile_site column
-    df.drop(columns=['fragile_site'], inplace=True)
+    # # Drop the fragile_site column
+    # df.drop(columns=['fragile_site'], inplace=True)
 
     # Drop cluster_size
     # df.drop(columns=['cluster_size'], inplace=True)
@@ -305,7 +298,9 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
     # Create alignment type feature, 0 for CIGAR alignment types (contains
     # CIGAR), 1 for CIGARCLIP (contains CIGARCLIP), 2 for SPLIT alignment (all
     # others)
-    # bed_df['call_type'] = bed_df['aln_type'].apply(lambda x: 1 if 'CIGARCLIP' in x else (0 if 'CIGAR' in x else 2))
+    bed_df['call_type'] = bed_df['aln_type'].apply(lambda x: 1 if 'CIGARCLIP' in x else (0 if 'CIGAR' in x else 2))
+    # Change call type to categorical.
+    bed_df['call_type'] = bed_df['call_type'].astype('category')
 
     # Drop the original aln_type column.
     bed_df.drop(columns=['aln_type'], inplace=True)
@@ -541,6 +536,13 @@ def run_bedtools_intersect(input_bed, table_bed, training_format=False):
         logging.error('Please check the input and table BED files.')
         sys.exit(1)
 
+
+    # Post-processing the features:
+    # Cap hmm log likelihood to avoid extreme values.
+    df['hmm_llh'] = np.clip(df['hmm_llh'], -1e6, 0)
+
+    # Update hmm_llh, set 0 to np.nan
+    df['hmm_llh'] = df['hmm_llh'].replace(0, np.nan)
 
 def bed_to_annovar_input(bed_file):
     """Convert the BED file to ANNOVAR input format."""

@@ -151,6 +151,13 @@ def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Dist
     feature_df = extract_features(bed_file, annovar_path, annovar_db_path, anno_outdir, buildver)
     logging.info('Extracted features from the BED file:\n%s', feature_df.head())
 
+    # Perform robust scaling on the read_depth and cluster_size columns
+    logging.info('Performing robust scaling on the read_depth and cluster_size columns...')
+    from sklearn.preprocessing import RobustScaler
+    scaler = RobustScaler()
+    feature_df[['read_depth', 'cluster_size']] = scaler.fit_transform(feature_df[['read_depth', 'cluster_size']])
+    logging.info('Robust scaling completed.')
+
     # Add interaction terms to the features
     feature_df = add_interaction_terms(feature_df)
     logging.info('Added interaction terms to the features.')
@@ -187,8 +194,8 @@ def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Dist
     start_col = feature_df.pop('start')
     end_col = feature_df.pop('end')
     # sv_length_col = feature_df.pop('sv_length')
-    read_depth_col = feature_df.pop('read_depth')
-    cluster_size_col = feature_df.pop('cluster_size')
+    read_depth_col = feature_df['read_depth']
+    cluster_size_col = feature_df['cluster_size']
     sv_type_str_col = feature_df.pop('sv_type_str')
 
     # # Normalize the cluster_size and read_depth columns using RobustScaler
@@ -259,12 +266,17 @@ def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Dist
     # prob_threshold = 0.05
 
     # Engineering feature interaction terms
-    prob_threshold = 0.01
+    # prob_threshold = 0.01
     # prob_threshold = 0.1
     # prob_threshold = 0.3  # Lowered recall
     # prob_threshold = 0.2
     # prob_threshold = 0.02  # Too many SVs
     # prob_threshold = 0.01
+
+    # 13 July 2025 - Feature updates
+    prob_threshold = 0.01  # Too high SV count for plat. ped.
+    # prob_threshold = 0.1  # Too low recall
+    # prob_threshold = 0.02
 
     filtered_indices = np.where(y_pred[:, 1] < prob_threshold)[0]
 

@@ -111,6 +111,24 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
     # ---------------------------------------------------------------
     # Data Preprocessing
     # ---------------------------------------------------------------
+
+    # Perform robust scaling on the read_depth and cluster_size columns using
+    # the RobustScaler from sklearn.
+    logging.info('Normalizing read_depth and cluster_size using Robust scaling.')
+    # First combine the data.
+    combined_data = pd.concat([tp_data, fp_data], ignore_index=True)
+    # Create a RobustScaler object.
+    from sklearn.preprocessing import RobustScaler
+    scaler = RobustScaler()
+    # Fit the scaler to the data.
+    robust_scaled = scaler.fit_transform(combined_data[['read_depth', 'cluster_size']])
+    # Update the data with the scaled values.
+    combined_data[['read_depth', 'cluster_size']] = robust_scaled
+    # Split the data back into true positives and false positives.
+    tp_data = combined_data.iloc[:tp_data.shape[0]]
+    fp_data = combined_data.iloc[tp_data.shape[0]:]
+    logging.info('Normalization completed. True positives: %d, False positives: %d', tp_data.shape[0], fp_data.shape[0])
+
     # Drop the genotype column from the data.
     logging.info('Dropping the genotype column from the data.')
     tp_data.drop(columns=['genotype'], inplace=True, errors='ignore')
@@ -225,48 +243,17 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
     # logging.info('Feature correlation difference analysis completed. Saved to %s',
     #              os.path.join(output_directory, 'feature_correlation_difference.png'))
 
-    # [TEST] Exit after this step to verify the feature extraction and data
-    # preprocessing.
-    # sys.exit(0)
-
     # Combine the true positive and false positive data.
     data = pd.concat([tp_data, fp_data], ignore_index=True)  # Ignore the index to realign the indices.
 
     # Add interaction terms to the data.
     data = add_interaction_terms(data)
 
-    # Drop the chromosome column from the data.
-    # data.drop(columns=['chrom'], inplace=True)
-
-    # Drop the chrom, start, end, sv_length, read_depth, and cluster_size
-    # columns
-    # logging.info('Dropping the chrom, start, end, sv_length, read_depth, and cluster_size columns from the data.')
-    # data.drop(columns=['chrom', 'start', 'end', 'sv_length', 'read_depth',
-    # 'cluster_size', 'sv_type_str'], inplace=True)
+    # Drop columns not needed for training.
     data.drop(columns=['chrom', 'start', 'end', 'sv_type_str'], inplace=True)
 
-    # Drop the SV type column (imbalance especially for inversions).
-    # logging.info('Dropping the sv_type column from the data.')
-    # data.drop(columns=['sv_type'], inplace=True)
-
-    # Normalize cluster_size and read_depth
-    # data = normalize_column(data, 'cluster_size')
-    # data = normalize_column(data, 'read_depth')
-
-    # Drop cluster_size
-    # data.drop(columns=['cluster_size'], inplace=True)
-
-    # # Drop the SV length column
-    # data.drop(columns=['sv_length'], inplace=True)
-
     # Drop the read_depth and cluster_size columns
-    data.drop(columns=['read_depth', 'cluster_size'], inplace=True)
-
-    # Drop the hmm log likelihood column
-    # data.drop(columns=['hmm_llh'], inplace=True)
-
-    # Drop the SV length and aln_type columns.
-    # data.drop(columns=['sv_length', 'aln_type'], inplace=True)
+    # data.drop(columns=['read_depth', 'cluster_size'], inplace=True)
 
     logging.info('Columns list after preprocessing: %s', data.columns.tolist())
 
@@ -290,59 +277,21 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
         "SVC": SVC(kernel='linear', class_weight='balanced', probability=True)
     }
 
-    # Split the data into training and testing sets.
-    logging.info('Splitting the data into training and testing sets (0.8/0.2).')
-    X_train, X_test, y_train, y_test = train_test_split(features, labels, test_size=0.2, random_state=42)
-    logging.info('Data split completed. Training set size: %d, Testing set size: %d',
+    train_full_data = True  # Set to True to train the full model with no split.
+    if train_full_data:
+        logging.info('Training the full model with no split.')
+        X_train, y_train = features, labels
+
+        # Use a dummy test set for evaluation.
+        X_test = features.sample(n=1000, random_state=42)  # Sample 1000 instances for testing.
+        y_test = labels.sample(n=1000, random_state=42)
+    else:
+        # Split the data into training and testing sets.
+        logging.info('Splitting the data into training and testing sets (0.8/0.2).')
+        X_train, X_test, y_train, y_test = train_test_split(features, labels, test_size=0.2, random_state=42)
+        logging.info('Data split completed. Training set size: %d, Testing set size: %d',
                  X_train.shape[0], X_test.shape[0])
-
-    # Compute sample weights based on SV length.
-    # svlen_weights = np.log1p(np.abs(X_train['sv_length']))
-    # svlen_weights = np.log1p(np.abs(X_train['sv_length'])) ** 2  # Square the
-    # weights to emphasize larger SV lengths.
-    # conf = np.clip(np.exp(X_train['hmm_llh'] / 1000), 1e-6, 1)
-    # # Replace NaN values in conf with 1.0
-    # conf = conf.fillna(1.0)
-    # svlen = np.log1p(np.abs(X_train['sv_length']) + 1e-6)  # Add a small value to avoid log(0)
-    # svlen_weights = conf * svlen
-
-    #     sv_type_map = {
-    #     'DEL': 0,
-    #     'DUP': 1,
-    #     'INV': 2,
-    #     'INS': 3,
-    #     'BND': 4,
-    #     'UNKNOWN': 5
-    # }
-    # Weights based on the SV type (weight inversions more heavily since they are
-    # less common in the dataset).
-    sv_type_weights = {
-        0: 1.0,  # DEL
-        1: 1.0,  # DUP
-        2: 5.0,  # INV
-        3: 1.0,  # INS
-        4: 1.0,  # BND
-        5: 1.0   # UNKNOWN
-    }
-    # Create a sample weight array based on the SV type.
-    # sample_weights = np.array([sv_type_weights.get(sv_type, 1.0) for sv_type in X_train['sv_type']])
-
-    # Split the data into 1/2 >10kb abs(sv_length) and 1/2 <10kb abs(sv_length),
-    # then train the model with 80% of the data and test with 20% of the data.
-    # logging.info('Splitting the data by size of SVs (1/2 >10kb abs(sv_length) and 1/2 <10kb abs(sv_length)).')
-    # large_sv_mask = features['sv_length'].abs() > 10000
-    # small_sv_mask = features['sv_length'].abs() <= 10000
     
-    
-    # # Drop the chromosome column from the features.
-    # X_train.drop(columns=['chrom'], inplace=True)
-    # X_test.drop(columns=['chrom'], inplace=True)
-
-    # # Print the number of features.
-    # logging.info('Number of features: %d', X_train.shape[1])
-    # # Print the feature names.
-    # feature_names = features.columns.tolist()
-    # logging.info('Feature names: %s', feature_names)
 
     for model_name, model in models.items():
         model_name_fp = model_name.replace(" ", "_")
