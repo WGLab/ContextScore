@@ -120,7 +120,7 @@ def create_bed(input_vcf, output_bed):
     bed_df.to_csv(output_bed, sep='\t', header=False, index=False)
     logging.info('Created BED file: %s', output_bed)
 
-def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Distribution'):
+def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Distribution', threshold=0.05):
     """Score the structural variants using the binary classification model.
 
     Args:
@@ -128,6 +128,8 @@ def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Dist
         input_vcf (str): Path to the input VCF file.
         output_vcf (str): Path to the output VCF file.
     """
+    prob_threshold = threshold
+    logging.info('Using probability threshold: %.3f', prob_threshold)
 
     # Create a BED file from the input VCF file
     bed_file = os.path.splitext(input_vcf)[0] + '.bed'
@@ -240,43 +242,7 @@ def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Dist
     plt.savefig(os.path.join(output_dir, 'probabilities_seaborn.png'))
     logging.info('Saved the plot of the probabilities to %s', os.path.join(output_dir, 'probabilities_seaborn.png'))
 
-    # Determine the threshold for filtering
-    # 22 May 2025
-    # prob_threshold = 0.001  # Does not affect results much
-    # prob_threshold = 0.2  # Lowered recall (too high)
-    # prob_threshold = 0.1  # Lowered recall (too high)
-    # prob_threshold = 0.01  # Slightly lowered recall (too high)
-    # prob_threshold = 0.005  # Even slightlier lowered recall (too high)
-    # prob_threshold = 0.001
-
-    # 10 July 2025 - Feature updates for large SVs
-    # prob_threshold = 0.01  # Low precision, high recall (same recall as no filtering)
-    # prob_threshold = 0.05 # Same result, improved precision
-    # prob_threshold = 0.1  # Same result, improved precision
-    #prob_threshold = 0.2  # Same result, improved precision
-    # prob_threshold = 0.25
-    # prob_threshold = 0.3  # Slightly lowered recall, improved precision
-    # prob_threshold = 0.4  # Lowered recall, inversions are not highest recall anymore, but achieved overal highest F1 score
-    # prob_threshold = 0.35  # Lowered recall, inversions are not highest recall
-    # anymore, F1 is equal to Sniffles2
-    # prob_threshold = 0.32
-
-    # 11 July 2025 - Feature updates for large SVs
-    # prob_threshold = 0.1  # Lowered recall
-    # prob_threshold = 0.05
-
-    # Engineering feature interaction terms
     # prob_threshold = 0.01
-    # prob_threshold = 0.1
-    # prob_threshold = 0.3  # Lowered recall
-    # prob_threshold = 0.2
-    # prob_threshold = 0.02  # Too many SVs
-    # prob_threshold = 0.01
-
-    # 13 July 2025 - Feature updates
-    prob_threshold = 0.01  # Too high SV count for plat. ped.
-    # prob_threshold = 0.1  # Too low recall
-    # prob_threshold = 0.02
 
     filtered_indices = np.where(y_pred[:, 1] < prob_threshold)[0]
 
@@ -397,7 +363,9 @@ if __name__ == '__main__':
                         help='Genome build version (default: hg38).')
     parser.add_argument('--title', type=str, default='Probability Distribution',
                         help='Title for the probability distribution plot (default: Probability Distribution).')
-    
+    parser.add_argument('--threshold', type=float, default=0.05,
+                        help='Threshold for filtering predictions (default: 0.05).')
+
     args = parser.parse_args()
     input_vcf = args.input
     output_vcf = args.output
@@ -445,5 +413,5 @@ if __name__ == '__main__':
         sys.exit(1)
 
     # Run the scoring function
-    score(model, input_vcf, output_vcf, buildver=buildver, title=args.title)
+    score(model, input_vcf, output_vcf, buildver=buildver, title=args.title, threshold=args.threshold)
     logging.info('Scoring process completed.')

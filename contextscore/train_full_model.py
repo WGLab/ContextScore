@@ -250,7 +250,13 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
     data = add_interaction_terms(data)
 
     # Drop columns not needed for training.
-    data.drop(columns=['chrom', 'start', 'end', 'sv_type_str'], inplace=True)
+    # data.drop(columns=['chrom', 'start', 'end', 'sv_type_str'], inplace=True)
+
+    # Pop the chrom column to use it later for cross-validation.
+    chrom_col = data.pop('chrom')
+
+    # Drop columns that are not needed for training.
+    data.drop(columns=['start', 'end', 'sv_type_str'], inplace=True, errors='ignore')
 
     # Drop the read_depth and cluster_size columns
     # data.drop(columns=['read_depth', 'cluster_size'], inplace=True)
@@ -277,7 +283,7 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
         "SVC": SVC(kernel='linear', class_weight='balanced', probability=True)
     }
 
-    train_full_data = True  # Set to True to train the full model with no split.
+    train_full_data = False  # Set to True to train the full model with no split.
     if train_full_data:
         logging.info('Training the full model with no split.')
         X_train, y_train = features, labels
@@ -297,18 +303,18 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
         model_name_fp = model_name.replace(" ", "_")
 
         # Skip SVC and logistic regression for now.
-        if model_name == "SVC":
-            logging.info('Skipping SVC model.')
-            continue
+        # if model_name == "SVC":
+        #     logging.info('Skipping SVC model.')
+        #     continue
 
         # if model_name == "Logistic Regression":
         #     logging.info('Skipping Logistic Regression model.')
         #     continue
 
-        # Skip all but XGBoost
-        if model_name != "XGBoost":
-            logging.info('Skipping %s model.', model_name)
-            continue
+        # # Skip all but XGBoost
+        # if model_name != "XGBoost":
+        #     logging.info('Skipping %s model.', model_name)
+        #     continue
 
         # # Split the data into training and testing sets.
         # logging.info('Splitting the data into training and testing sets (0.8/0.2).')
@@ -380,38 +386,38 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
         logging.info('ROC AUC score for the training set: %f', roc_auc_train)
         logging.info('ROC AUC score for the testing set: %f', roc_auc_test)
 
-        # # Plot the ROC curve for the training set.
-        # plt.figure()
-        # plt.plot(fpr_train, tpr_train, color='blue', lw=2, label='ROC curve (area = %0.2f)' % roc_auc_train)
-        # # plt.plot(fpr, tpr, color='darkorange', lw=2, label='ROC curve (area = %0.2f)' % roc_auc)
-        # plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
-        # plt.xlim([0.0, 1.0])
-        # plt.ylim([0.0, 1.05])
-        # plt.xlabel('False Positive Rate')
-        # plt.ylabel('True Positive Rate')
-        # plt.title('{} Receiver Operating Characteristic (Training Set)'.format(model_name))
-        # plt.legend(loc='lower right')
-        # # Save the plot to the output directory.
-        # roc_plot_path = os.path.join(output_directory, model_name_fp + '_roc_curve.png')
-        # plt.savefig(roc_plot_path)
-        # plt.close()
-        # logging.info('Saved the ROC curve to %s', roc_plot_path)
+        # Plot the ROC curve for the training set.
+        plt.figure()
+        plt.plot(fpr_train, tpr_train, color='blue', lw=2, label='ROC curve (area = %0.2f)' % roc_auc_train)
+        # plt.plot(fpr, tpr, color='darkorange', lw=2, label='ROC curve (area = %0.2f)' % roc_auc)
+        plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+        plt.xlim([0.0, 1.0])
+        plt.ylim([0.0, 1.05])
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title('{} Receiver Operating Characteristic (Training Set)'.format(model_name))
+        plt.legend(loc='lower right')
+        # Save the plot to the output directory.
+        roc_plot_path = os.path.join(output_directory, model_name_fp + '_roc_curve.png')
+        plt.savefig(roc_plot_path)
+        plt.close()
+        logging.info('Saved the ROC curve to %s', roc_plot_path)
 
-        # # Plot the ROC curve for the testing set.
-        # plt.figure()
-        # plt.plot(fpr_test, tpr_test, color='blue', lw=2, label='ROC curve (area = %0.2f)' % roc_auc_test)
-        # plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
-        # plt.xlim([0.0, 1.0])
-        # plt.ylim([0.0, 1.05])
-        # plt.xlabel('False Positive Rate')
-        # plt.ylabel('True Positive Rate')
-        # plt.title('{} Receiver Operating Characteristic (Testing Set)'.format(model_name_fp))
-        # plt.legend(loc='lower right')
-        # # Save the plot to the output directory.
-        # roc_plot_path = os.path.join(output_directory, model_name + '_roc_curve_test.png')
-        # plt.savefig(roc_plot_path)
-        # plt.close()
-        # logging.info('Saved the ROC curve to %s', roc_plot_path)
+        # Plot the ROC curve for the testing set.
+        plt.figure()
+        plt.plot(fpr_test, tpr_test, color='blue', lw=2, label='ROC curve (area = %0.2f)' % roc_auc_test)
+        plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+        plt.xlim([0.0, 1.0])
+        plt.ylim([0.0, 1.05])
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title('{} Receiver Operating Characteristic (Testing Set)'.format(model_name_fp))
+        plt.legend(loc='lower right')
+        # Save the plot to the output directory.
+        roc_plot_path = os.path.join(output_directory, model_name + '_roc_curve_test.png')
+        plt.savefig(roc_plot_path)
+        plt.close()
+        logging.info('Saved the ROC curve to %s', roc_plot_path)
 
         # Compute precision-recall curve
         # precision, recall, thresholds_pr = precision_recall_curve(y_test, y_test_prob)
@@ -470,7 +476,15 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
             "sv_type": "Structural Variant Type",
             "fragile_site": "Fragile Site",
             "centromere": "Centromere",
-            "telomere": "Telomere"
+            "telomere": "Telomere",
+            "call_type": "Alignment Type",
+            "simple_repeat_cs": "Simple Repeat x Cluster Size",
+            "simple_repeat_rd": "Simple Repeat x Read Depth",
+            "cs_hmm": "Cluster Size x HMM LLH",
+            "fragile_site_cs": "Fragile Site x Cluster Size",
+            "fragile_site_rd": "Fragile Site x Read Depth",
+            "segdup_cs": "Seg. Dup. x Cluster Size",
+            "segdup_rd": "Seg. Dup. x Read Depth"
         }
 
         # Map the feature names to their labels.
@@ -478,6 +492,9 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
 
         logging.info('Feature names: %s', feature_names)
         logging.info('Number of features: %d', len(feature_names))
+
+        # Continue if not running SHAP analysis.
+        continue
 
         # Feature importance for Random_Forest and XGBoost.
         if model_name in ["Random_Forest", "XGBoost"]:
@@ -548,27 +565,27 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
             # sys.exit(0)
 
             # Convert bool columns to int for SHAP analysis.
-            # bool_cols = X_train.select_dtypes(include=['bool']).columns
-            # X_train[bool_cols] = X_train[bool_cols].astype(int)
-
-            # Figure out which column has dtype object in X_train.
-            # print("X_train dtypes:")
-            # print(X_train.dtypes)
-            # print("X_train columns:")
-            # print(X_train.columns)
+            bool_cols = X_train.select_dtypes(include=['bool']).columns
+            X_train[bool_cols] = X_train[bool_cols].astype(int)
 
             # Analyze the feature importances using SHAP values.
-            # import shap
+            import shap
             # explainer = shap.Explainer(model, X_train)
             # shap_values = explainer(X_train)
-            # # Plot the SHAP values.
-            # plt.figure(figsize=(10, 6))
-            # shap.summary_plot(shap_values, X_train, feature_names=feature_names, show=False)
-            # # Save the SHAP summary plot to the output directory.
-            # shap_plot_path = os.path.join(output_directory, model_name_fp + '_shap_summary_plot.png')
-            # plt.savefig(shap_plot_path, bbox_inches='tight')
-            # plt.close()
-            # logging.info('Saved the SHAP summary plot to %s', shap_plot_path)
+
+            # SHAP doesn't support XGBoost with categorical features directly,
+            # so we need to use their suggested workaround.
+            explainer = shap.TreeExplainer(model, feature_perturbation="tree_path_dependent")
+            shap_values = explainer.shap_values(X_train)
+
+            # Plot the SHAP values.
+            plt.figure(figsize=(10, 6))
+            shap.summary_plot(shap_values, X_train, feature_names=feature_names, show=False)
+            # Save the SHAP summary plot to the output directory.
+            shap_plot_path = os.path.join(output_directory, model_name_fp + '_shap_summary_plot.png')
+            plt.savefig(shap_plot_path, bbox_inches='tight')
+            plt.close()
+            logging.info('Saved the SHAP summary plot to %s', shap_plot_path)
 
             # -----------------------------------------------
             # SV Length vs SHAP values
@@ -717,7 +734,7 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
         # logging.info('Cross-validation scores: %s', scores)
         # logging.info('Mean cross-validation score: %f', scores.mean())
 
-    # Exit early to test the saved model.
+    # Exit early if not running per-chromosome cross-validation analysis.
     sys.exit(0)
 
     # Run a cross-validation analysis splitting the data by chromosome.
@@ -725,28 +742,44 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
     # chromosomes = features['chrom'].unique()
 
     # Specify the chromosomes to not include non-standard chromosomes.
-    chromosomes = ['chr1', 'chr2', 'chr3', 'chr4', 'chr5', 'chr6', 'chr7', 'chr8', 'chr9', 'chr10',
-                  'chr11', 'chr12', 'chr13', 'chr14', 'chr15', 'chr16', 'chr17', 'chr18', 'chr19', 'chr20', 'chr21', 'chr22', 'chrX', 'chrY']
+    # chromosomes = ['chr1', 'chr2', 'chr3', 'chr4', 'chr5', 'chr6', 'chr7', 'chr8', 'chr9', 'chr10',
+    #               'chr11', 'chr12', 'chr13', 'chr14', 'chr15', 'chr16', 'chr17', 'chr18', 'chr19', 'chr20', 'chr21', 'chr22', 'chrX', 'chrY']
     
+    # 4 August 2025: Remove chrY from the analysis. More than half is missing in
+    # GRCh38 and leads to high false positive rates.
+    chromosomes = ['chr1', 'chr2', 'chr3', 'chr4', 'chr5', 'chr6', 'chr7', 'chr8', 'chr9', 'chr10',
+                  'chr11', 'chr12', 'chr13', 'chr14', 'chr15', 'chr16', 'chr17', 'chr18', 'chr19', 'chr20', 'chr21', 'chr22', 'chrX']
+
     logging.info('Chromosomes: %s', chromosomes)
     f1_scores = {}
+    precision_scores = {}
+    recall_scores = {}
     for model_name, model in models.items():
         # Skip SVC
         if model_name == "SVC":
             logging.info('Skipping SVC model for cross-validation analysis.')
             continue
 
+        # Skip all but XGBoost
+        if model_name != "XGBoost":
+            logging.info('Skipping %s model for cross-validation analysis.', model_name)
+            continue
+
+        # Dictionary with number of SVs in the training set for each chromosome.
+        sv_counts = {chrom: features[chrom_col == chrom].shape[0] for chrom in chromosomes}
+        logging.info('Number of SVs in the training set for each chromosome: %s', sv_counts)
+
         for chrom in chromosomes:
             logging.info('Training the %s model on chromosome %s.', model_name, chrom)
             # Split the data into training and testing sets by chromosome.
-            X_train_chrom = features[features['chrom'] != chrom].copy()
-            y_train_chrom = labels[features['chrom'] != chrom].copy()
-            X_test_chrom = features[features['chrom'] == chrom].copy()
-            y_test_chrom = labels[features['chrom'] == chrom].copy()
+            X_train_chrom = features[chrom_col != chrom].copy()
+            y_train_chrom = labels[chrom_col != chrom].copy()
+            X_test_chrom = features[chrom_col == chrom].copy()
+            y_test_chrom = labels[chrom_col == chrom].copy()
 
             # Drop the chromosome column from the features.
-            X_train_chrom.drop(columns=['chrom'], inplace=True)
-            X_test_chrom.drop(columns=['chrom'], inplace=True)
+            # X_train_chrom.drop(columns=['chrom'], inplace=True)
+            # X_test_chrom.drop(columns=['chrom'], inplace=True)
 
             logging.info('Training set size: %d, Testing set size: %d',
                          X_train_chrom.shape[0], X_test_chrom.shape[0])
@@ -761,30 +794,97 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
 
             # Compute the F1 score for the testing set.
             from sklearn.metrics import f1_score
-            y_test_chrom_pred = (y_test_chrom_prob >= optimal_threshold).astype(int)
+            y_test_chrom_pred = (y_test_chrom_prob >= 0.5).astype(int)  # Use a threshold of 0.5 for classification.
             f1 = f1_score(y_test_chrom, y_test_chrom_pred)
-            # f1_scores.append(f1)
             f1_scores[(model_name, chrom)] = f1
             logging.info('F1 score for the %s model on chromosome %s: %f', model_name, chrom, f1)
+
+            # Compute precision and recall for the testing set.
+            from sklearn.metrics import precision_score, recall_score
+            precision = precision_score(y_test_chrom, y_test_chrom_pred)
+            recall = recall_score(y_test_chrom, y_test_chrom_pred)
+            precision_scores[(model_name, chrom)] = precision
+            recall_scores[(model_name, chrom)] = recall
+            logging.info('Precision for the %s model on chromosome %s: %f', model_name, chrom, precision)
+            logging.info('Recall for the %s model on chromosome %s: %f', model_name, chrom, recall)
+
+            # Compute the F1 score for the testing set.
+            # from sklearn.metrics import f1_score
+            # y_test_chrom_pred = (y_test_chrom_prob >= optimal_threshold).astype(int)
+            # f1 = f1_score(y_test_chrom, y_test_chrom_pred)
+            # # f1_scores.append(f1)
+            # f1_scores[(model_name, chrom)] = f1
+            # logging.info('F1 score for the %s model on chromosome %s: %f', model_name, chrom, f1)
             
     logging.info('Cross-validation analysis completed. F1 scores: %s', f1_scores)
 
     # Plot the F1 scores for each model and chromosome (one plot per model).
-    logging.info('Plotting the F1 scores for each model and chromosome.')
+    logging.info('Plotting the scores for each model and chromosome.')
+    metrics = ['F1 Score', 'Precision', 'Recall']
     for model_name in models.keys():
-        model_f1_scores = {chrom: f1_scores[(model_name, chrom)] for chrom in chromosomes if (model_name, chrom) in f1_scores}
-        plt.figure(figsize=(10, 6))
-        sns.barplot(x=list(model_f1_scores.keys()), y=list(model_f1_scores.values()), palette='viridis')
-        plt.xlabel('Chromosome')
-        plt.ylabel('F1 Score')
-        plt.title('F1 Scores for %s Model by Chromosome' % model_name)
-        plt.xticks(rotation=45)
-        plt.tight_layout()
-        # Save the plot to the output directory.
-        f1_plot_path = os.path.join(output_directory, model_name + '_f1_scores_by_chromosome.png')
-        plt.savefig(f1_plot_path)
-        plt.close()
-        logging.info('Saved the F1 scores plot to %s', f1_plot_path)
+        # Skip if not XGBoost
+        if model_name != "XGBoost":
+            logging.info('Skipping %s model for plotting scores by chromosome.', model_name)
+            continue
+
+        # Save a plot with F1, Precision, and Recall scores for chrY
+        if 'chrY' in chromosomes:
+            logging.info('Plotting scores for %s model on chrY.', model_name)
+            # Create a bar plot for the F1 scores by chromosome.
+            chry_f1 = f1_scores.get((model_name, 'chrY'), 0)
+            chry_precision = precision_scores.get((model_name, 'chrY'), 0)
+            chry_recall = recall_scores.get((model_name, 'chrY'), 0)
+
+            # plt.figure(figsize=(10, 6))
+
+            # Make it way smaller for better visibility.
+            plt.figure(figsize=(6, 4))
+
+            # Plot F1, Precision, and Recall scores for chrY.
+            sns.barplot(x=['F1 Score', 'Precision', 'Recall'], y=[chry_f1, chry_precision, chry_recall], color='black')
+
+            # plt.xlabel('Metric')
+            plt.ylabel('Score')
+            plt.title('%s Scores for %s Model on chrY' % (model_name, model_name))
+            plt.xticks(rotation=45)
+            plt.legend()
+            plt.tight_layout()
+            # Save the plot to the output directory.
+            score_plot_path = os.path.join(output_directory, model_name + '_scores_chrY.png')
+            plt.savefig(score_plot_path)
+            plt.close()
+            logging.info('Saved the scores plot for chrY to %s', score_plot_path)
+
+
+        for metric, scores in zip(metrics, [f1_scores, precision_scores, recall_scores]):
+            logging.info('Plotting %s for %s model by chromosome.', metric, model_name)
+            # Create a bar plot for the F1 scores by chromosome.
+            # model_f1_scores = {chrom: f1_scores[(model_name, chrom)] for chrom
+            # in chromosomes if (model_name, chrom) in f1_scores}
+            model_scores = {chrom: scores[(model_name, chrom)] for chrom in chromosomes if (model_name, chrom) in scores}
+
+            plt.figure(figsize=(10, 6))
+            # Smaller figure size for better visibility.
+            # plt.figure(figsize=(8, 5))
+            ax = sns.barplot(x=list(model_scores.keys()), y=list(model_scores.values()), color='black')
+
+            # Annotate each bar with the number of SVs in the training set for that
+            # chromosome.
+            # Put the number of SVs above each bar.
+            # for i, (chrom, score) in enumerate(model_scores.items()):
+            #     num_sv = sv_counts[chrom]
+            #     ax.text(i, score + 0.01, f'{num_sv}', ha='center', va='bottom', fontsize=8)
+
+            plt.xlabel('Chromosome')
+            plt.ylabel(metric)
+            plt.title('%s for %s Model by Chromosome' % (metric, model_name))
+            plt.xticks(rotation=45)
+            plt.tight_layout()
+            # Save the plot to the output directory.
+            score_plot_path = os.path.join(output_directory, model_name + '_%s_by_chromosome.png' % metric.lower().replace(' ', '_'))
+            plt.savefig(score_plot_path)
+            plt.close()
+            logging.info('Saved the %s plot to %s', metric, score_plot_path)
 
 def run(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, tp_bed_hg19=None, fp_bed_hg19=None):
     """Run the training process."""
