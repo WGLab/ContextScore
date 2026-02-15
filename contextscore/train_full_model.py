@@ -78,7 +78,6 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
     # SV Feature Extraction
     # ---------------------------------------------------------------
 
-
     # Extract the features from the VCF files.
     logging.info('Extracting features from the true positive and false positive VCF files (GRCh38).')
     buildversion = 'hg38'
@@ -103,14 +102,24 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
         logging.info('Concatenating the data from hg38 and hg19.')
         tp_data = pd.concat([tp_data, tp_data_hg19], ignore_index=True)
         fp_data = pd.concat([fp_data, fp_data_hg19], ignore_index=True)
+
     else:
         logging.info('No hg19 data provided. Using only hg38 data.')
     logging.info('Feature extraction completed. True positives: %d, False positives: %d',
                  tp_data.shape[0], fp_data.shape[0])
-    
+
     # ---------------------------------------------------------------
     # Data Preprocessing
     # ---------------------------------------------------------------
+
+    # Remove duplicate rows from the concatenated data.
+    tp_count_before = tp_data.shape[0]
+    tp_data.drop_duplicates(inplace=True)
+    tp_count_after = tp_data.shape[0]
+    fp_count_before = fp_data.shape[0]
+    fp_data.drop_duplicates(inplace=True)
+    fp_count_after = fp_data.shape[0]
+    logging.info('Removed %d tp duplicates and %d fp duplicates from the concatenated data. Remaining true positives: %d, remaining false positives: %d', tp_count_before - tp_count_after, fp_count_before - fp_count_after, tp_data.shape[0], fp_data.shape[0])
 
     # Perform robust scaling on the read_depth and cluster_size columns using
     # the RobustScaler from sklearn.
@@ -139,76 +148,6 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
     tp_data.drop(columns=['cn_state'], inplace=True, errors='ignore')
     fp_data.drop(columns=['cn_state'], inplace=True, errors='ignore')
 
-    # Normalize cluster_size and read_depth using Robust scaling.
-    # logging.info('Normalizing cluster_size and read_depth using Robust scaling.')
-    # from sklearn.preprocessing import RobustScaler, MinMaxScaler
-    # # Combine the data.
-    # combined_data = pd.concat([tp_data, fp_data])
-    # # Create a RobustScaler object.
-    # scaler = RobustScaler()
-    # # Fit the scaler to the data.
-    # robust_scaled = scaler.fit_transform(combined_data[['cluster_size', 'read_depth']])
-
-    # # Update the data with the scaled values.
-    # combined_data[['cluster_size', 'read_depth']] = robust_scaled
-    # # Split the data back into true positives and false positives.
-    # tp_data[['cluster_size', 'read_depth']] = combined_data[['cluster_size', 'read_depth']].iloc[:tp_data.shape[0]]
-    # fp_data[['cluster_size', 'read_depth']] = combined_data[['cluster_size', 'read_depth']].iloc[tp_data.shape[0]:]
-
-    # logging.info('Normalization completed.')
-
-    # # Drop the cluster_size column
-    # logging.info('Dropping the cluster_size column from the data.')
-    # tp_data.drop(columns=['cluster_size'], inplace=True)
-    # fp_data.drop(columns=['cluster_size'], inplace=True)
-
-    # Plot the distributions of cluster_size in the TP vs. FP data.
-    # logging.info('Plotting the distributions of cluster_size in the TP vs. FP data.')
-    # plt.figure(figsize=(10, 6))
-    # sns.histplot(tp_data['cluster_size'], color='blue', label='True Positives', kde=True, stat="density", bins=30)
-    # sns.histplot(fp_data['cluster_size'], color='red', label='False Positives', kde=True, stat="density", bins=30)
-    # plt.xlabel('Cluster Size')
-    # plt.ylabel('Density')
-    # plt.title('Distribution of Cluster Size (True Positives vs False Positives)')
-    # plt.legend()
-    # plt.tight_layout()
-    # plt.savefig(os.path.join(output_directory, 'cluster_size_distribution.png'))
-    # plt.close()
-    # logging.info('Cluster size distribution plot saved to %s', os.path.join(output_directory, 'cluster_size_distribution.png'))
-
-    # Analyze feature correlations in the collected data.
-    # logging.info('Analyzing feature correlations in the collected data.')
-    # corr_matrix = tp_data.corr()
-    # plt.figure(figsize=(12, 10))
-    # sns.heatmap(corr_matrix, annot=True, fmt=".2f", cmap='coolwarm', square=True, cbar_kws={"shrink": .8})
-    # plt.title('Feature Correlation Matrix (True Positives)')
-    # plt.tight_layout()
-    # plt.savefig(os.path.join(output_directory, 'feature_correlation_tp.png'))
-    # plt.close()
-    # corr_matrix = fp_data.corr()
-    # plt.figure(figsize=(12, 10))
-    # sns.heatmap(corr_matrix, annot=True, fmt=".2f", cmap='coolwarm', square=True, cbar_kws={"shrink": .8})
-    # plt.title('Feature Correlation Matrix (False Positives)')
-    # plt.tight_layout()
-    # plt.savefig(os.path.join(output_directory, 'feature_correlation_fp.png'))
-    # plt.close()
-    # logging.info('Feature correlation analysis completed. TP saved to %s and FP saved to %s',
-    #              os.path.join(output_directory, 'feature_correlation_tp.png'),
-    #              os.path.join(output_directory, 'feature_correlation_fp.png'))
-    
-    # Analyze feature correlations in the combined data.
-    # logging.info('Analyzing feature correlations in the combined data.')
-    # combined_data = pd.concat([tp_data, fp_data])
-    # corr_matrix_combined = combined_data.corr()
-    # plt.figure(figsize=(12, 10))
-    # sns.heatmap(corr_matrix_combined, annot=True, fmt=".2f", cmap='coolwarm', square=True, cbar_kws={"shrink": .8})
-    # plt.title('Feature Correlation Matrix (Combined Data)')
-    # plt.tight_layout()
-    # plt.savefig(os.path.join(output_directory, 'feature_correlation_combined.png'))
-    # plt.close()
-    # logging.info('Feature correlation analysis completed for combined data. Saved to %s',
-    #              os.path.join(output_directory, 'feature_correlation_combined.png'))
-
     # Add the labels.
     tp_data['label'] = 1
     fp_data['label'] = 0
@@ -230,18 +169,6 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
 
     logging.info('Number of true labels after balancing: %d', tp_data.shape[0])
     logging.info('Number of false labels after balancing: %d', fp_data.shape[0])
-
-    # Plot the differences in correlation between true positives and false
-    # positives.
-    # diff_corr = tp_data.corr() - fp_data.corr()
-    # plt.figure(figsize=(12, 10))
-    # sns.heatmap(diff_corr, annot=True, fmt=".2f", cmap='coolwarm', square=True, cbar_kws={"shrink": .8})
-    # plt.title('Difference in Feature Correlation (True Positives - False Positives)')
-    # plt.tight_layout()
-    # plt.savefig(os.path.join(output_directory, 'feature_correlation_difference.png'))
-    # plt.close()
-    # logging.info('Feature correlation difference analysis completed. Saved to %s',
-    #              os.path.join(output_directory, 'feature_correlation_difference.png'))
 
     # Combine the true positive and false positive data.
     data = pd.concat([tp_data, fp_data], ignore_index=True)  # Ignore the index to realign the indices.
@@ -302,32 +229,10 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
     for model_name, model in models.items():
         model_name_fp = model_name.replace(" ", "_")
 
-        # Skip SVC and logistic regression for now.
-        # if model_name == "SVC":
-        #     logging.info('Skipping SVC model.')
-        #     continue
-
-        # if model_name == "Logistic Regression":
-        #     logging.info('Skipping Logistic Regression model.')
-        #     continue
-
-        # # Skip all but XGBoost
-        # if model_name != "XGBoost":
-        #     logging.info('Skipping %s model.', model_name)
-        #     continue
-
-        # # Split the data into training and testing sets.
-        # logging.info('Splitting the data into training and testing sets (0.8/0.2).')
-        # X_train, X_test, y_train, y_test = train_test_split(features, labels, test_size=0.2, random_state=42)
-
-        # Normalize the data since some features such as read depth and LRR vary across
-        # different samples and can have different ranges.
-        # from sklearn.preprocessing import StandardScaler
-        # scaler = StandardScaler()
-        # X_train = scaler.fit_transform(X_train)
-        # X_test = scaler.transform(X_test)
-        # logging.info('Data split and scaled. Training set size: %d, Testing set size: %d',
-        #              X_train.shape[0], X_test.shape[0])
+        # Skip SVC
+        if model_name == "SVC":
+            logging.info('Skipping SVC model.')
+            continue
         
         # Print the number of features.
         logging.info('Number of features: %d', X_train.shape[1])
@@ -388,14 +293,15 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
 
         # Plot the ROC curve for the training set.
         plt.figure()
-        plt.plot(fpr_train, tpr_train, color='blue', lw=2, label='ROC curve (area = %0.2f)' % roc_auc_train)
+        plt.plot(fpr_train, tpr_train, color='blue', lw=2, label='ROC curve (area = %0.3f)' % roc_auc_train)
         # plt.plot(fpr, tpr, color='darkorange', lw=2, label='ROC curve (area = %0.2f)' % roc_auc)
         plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
         plt.xlim([0.0, 1.0])
         plt.ylim([0.0, 1.05])
         plt.xlabel('False Positive Rate')
         plt.ylabel('True Positive Rate')
-        plt.title('{} Receiver Operating Characteristic (Training Set)'.format(model_name))
+        model_name_label = model_name.replace("_", " ")
+        plt.title('{} Receiver Operating Characteristic (Training Set)'.format(model_name_label))
         plt.legend(loc='lower right')
         # Save the plot to the output directory.
         roc_plot_path = os.path.join(output_directory, model_name_fp + '_roc_curve.png')
@@ -405,13 +311,13 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
 
         # Plot the ROC curve for the testing set.
         plt.figure()
-        plt.plot(fpr_test, tpr_test, color='blue', lw=2, label='ROC curve (area = %0.2f)' % roc_auc_test)
+        plt.plot(fpr_test, tpr_test, color='blue', lw=2, label='ROC curve (area = %0.3f)' % roc_auc_test)
         plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
         plt.xlim([0.0, 1.0])
         plt.ylim([0.0, 1.05])
         plt.xlabel('False Positive Rate')
         plt.ylabel('True Positive Rate')
-        plt.title('{} Receiver Operating Characteristic (Testing Set)'.format(model_name_fp))
+        plt.title('{} Receiver Operating Characteristic (Testing Set)'.format(model_name_label))
         plt.legend(loc='lower right')
         # Save the plot to the output directory.
         roc_plot_path = os.path.join(output_directory, model_name + '_roc_curve_test.png')
