@@ -56,6 +56,8 @@ from io import StringIO
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.pipeline import Pipeline
+from sklearn.model_selection import GridSearchCV, StratifiedKFold
 from xgboost import XGBClassifier
 from sklearn.svm import SVC
 
@@ -70,43 +72,104 @@ from extract_features import extract_features, add_interaction_terms, normalize_
 # Set up the logger.
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+def balance_tp_fp_datasets(tp_data, fp_data):
+    """Balance the true positive and false positive datasets by undersampling the lower-count class."""
+    tp_count = tp_data.shape[0]
+    fp_count = fp_data.shape[0]
 
-def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, tp_bed_hg19=None, fp_bed_hg19=None):
+    if tp_count > fp_count:
+        logging.info('Balancing the dataset by undersampling the true positives (count = %d) to match the false positives (count = %d)', tp_count, fp_count)
+        tp_data = tp_data.sample(fp_count, random_state=42)
+    elif fp_count > tp_count:
+        logging.info('Balancing the dataset by undersampling the false positives (count = %d) to match the true positives (count = %d)', fp_count, tp_count)
+        fp_data = fp_data.sample(tp_count, random_state=42)
+    else:
+        logging.info('The dataset is already balanced. True positives: %d, False positives: %d', tp_count, fp_count)
+
+    return tp_data, fp_data
+
+def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp_platinum_grch38, fp_platinum_grch38, output_directory, annovar_path, db_path, outdiranno, tp_bed_hg19=None, fp_bed_hg19=None, leave_out=None):
     """Train the binary classification model."""
 
     # ---------------------------------------------------------------
     # SV Feature Extraction
     # ---------------------------------------------------------------
 
+    # Set paths to none if leave_out is set to the corresponding dataset
+    if leave_out == "hg002":
+        logging.info('Leaving out HG002 dataset from training.')
+        tp_hg002_grch37 = None
+        fp_hg002_grch37 = None
+    elif leave_out == "visor":
+        logging.info('Leaving out Visor dataset from training.')
+        tp_visor_grch38 = None
+        fp_visor_grch38 = None
+    elif leave_out == "platinum":
+        logging.info('Leaving out Platinum Pedigree dataset from training.')
+        tp_platinum_grch38 = None
+        fp_platinum_grch38 = None
+
+    # ===============================================================
     # Extract the features from the VCF files.
+    # ===============================================================
+    # GRCh38 data.
     logging.info('Extracting features from the true positive and false positive VCF files (GRCh38).')
     buildversion = 'hg38'
-    tp_anno_outdir = os.path.join(outdiranno, "tp_anno")
-    tp_data = extract_features(tp_bed, annovar_path, db_path, tp_anno_outdir, buildversion=buildversion)
-    logging.info('Extracted %d features from the true positive VCF file.', tp_data.shape[0])
-    fp_anno_outdir = os.path.join(outdiranno, "fp_anno")
-    fp_data = extract_features(fp_bed, annovar_path, db_path, fp_anno_outdir, buildversion=buildversion)
-    logging.info('Extracted %d features from the false positive VCF file.', fp_data.shape[0])
+    tp_visor_anno = extract_features(tp_visor_grch38, annovar_path, db_path, os.path.join(outdiranno, "tp_anno_grch38"), buildversion=buildversion) if tp_visor_grch38 is not None else None
+    fp_visor_anno = extract_features(fp_visor_grch38, annovar_path, db_path, os.path.join(outdiranno, "fp_anno_grch38"), buildversion=buildversion) if fp_visor_grch38 is not None else None
+    # Balance datasets before concatenation. This is important to prevent the model from being biased towards the class with more samples.
+    # if tp_visor_anno is not None and fp_visor_anno is not None:
+        # tp_visor_anno, fp_visor_anno = balance_tp_fp_datasets(tp_visor_anno, fp_visor_anno)
+    
+    tp_platinum_anno = extract_features(tp_platinum_grch38, annovar_path, db_path, os.path.join(outdiranno, "tp_anno_grch38"), buildversion=buildversion) if tp_platinum_grch38 is not None else None
+    fp_platinum_anno = extract_features(fp_platinum_grch38, annovar_path, db_path, os.path.join(outdiranno, "fp_anno_grch38"), buildversion=buildversion) if fp_platinum_grch38 is not None else None
+    # Balance datasets before concatenation.
+    # if tp_platinum_anno is not None and fp_platinum_anno is not None:
+        # tp_platinum_anno, fp_platinum_anno = balance_tp_fp_datasets(tp_platinum_anno, fp_platinum_anno)
 
-    logging.info('Extracting features from the true positive and false positive VCF files (HG002-GRCh19).')
+    # HG002 data (GRCh37).
+    logging.info('Extracting features from the true positive and false positive VCF files (HG002-GRCh37).')
     buildversion = 'hg19'
-    if tp_bed_hg19 is not None and fp_bed_hg19 is not None:
-        tp_anno_outdir_hg19 = os.path.join(outdiranno, "tp_anno_hg19")
-        tp_data_hg19 = extract_features(tp_bed_hg19, annovar_path, db_path, tp_anno_outdir_hg19, buildversion=buildversion)
-        logging.info('Extracted %d features from the true positive VCF file (hg19).', tp_data_hg19.shape[0])
-        fp_anno_outdir_hg19 = os.path.join(outdiranno, "fp_anno_hg19")
-        fp_data_hg19 = extract_features(fp_bed_hg19, annovar_path, db_path, fp_anno_outdir_hg19, buildversion=buildversion)
-        logging.info('Extracted %d features from the false positive VCF file (hg19).', fp_data_hg19.shape[0])
+    tp_hg002_anno = extract_features(tp_hg002_grch37, annovar_path, db_path, os.path.join(outdiranno, "tp_anno_grch37"), buildversion=buildversion) if tp_hg002_grch37 is not None else None
+    fp_hg002_anno = extract_features(fp_hg002_grch37, annovar_path, db_path, os.path.join(outdiranno, "fp_anno_grch37"), buildversion=buildversion) if fp_hg002_grch37 is not None else None
+    # Balance datasets before concatenation.
+    # if tp_hg002_anno is not None and fp_hg002_anno is not None:
+        # tp_hg002_anno, fp_hg002_anno = balance_tp_fp_datasets(tp_hg002_anno, fp_hg002_anno)
 
-        # Concatenate the data from hg38 and hg19.
-        logging.info('Concatenating the data from hg38 and hg19.')
-        tp_data = pd.concat([tp_data, tp_data_hg19], ignore_index=True)
-        fp_data = pd.concat([fp_data, fp_data_hg19], ignore_index=True)
+    # Concatenate the data from all datasets.
+    logging.info('Concatenating the data from all datasets.')
+    tp_data = pd.concat([df for df in [tp_visor_anno, tp_platinum_anno, tp_hg002_anno] if df is not None], ignore_index=True)
+    fp_data = pd.concat([df for df in [fp_visor_anno, fp_platinum_anno, fp_hg002_anno] if df is not None], ignore_index=True)
 
-    else:
-        logging.info('No hg19 data provided. Using only hg38 data.')
-    logging.info('Feature extraction completed. True positives: %d, False positives: %d',
-                 tp_data.shape[0], fp_data.shape[0])
+    # Extract the features from the VCF files.
+    # logging.info('Extracting features from the true positive and false positive VCF files (GRCh38).')
+    # buildversion = 'hg38'
+    # tp_anno_outdir = os.path.join(outdiranno, "tp_anno")
+    # tp_data = extract_features(tp_bed, annovar_path, db_path, tp_anno_outdir, buildversion=buildversion)
+    # logging.info('Extracted %d features from the true positive VCF file.', tp_data.shape[0])
+    # fp_anno_outdir = os.path.join(outdiranno, "fp_anno")
+    # fp_data = extract_features(fp_bed, annovar_path, db_path, fp_anno_outdir, buildversion=buildversion)
+    # logging.info('Extracted %d features from the false positive VCF file.', fp_data.shape[0])
+
+    # logging.info('Extracting features from the true positive and false positive VCF files (HG002-GRCh19).')
+    # buildversion = 'hg19'
+    # if tp_bed_hg19 is not None and fp_bed_hg19 is not None:
+    #     tp_anno_outdir_hg19 = os.path.join(outdiranno, "tp_anno_hg19")
+    #     tp_data_hg19 = extract_features(tp_bed_hg19, annovar_path, db_path, tp_anno_outdir_hg19, buildversion=buildversion)
+    #     logging.info('Extracted %d features from the true positive VCF file (hg19).', tp_data_hg19.shape[0])
+    #     fp_anno_outdir_hg19 = os.path.join(outdiranno, "fp_anno_hg19")
+    #     fp_data_hg19 = extract_features(fp_bed_hg19, annovar_path, db_path, fp_anno_outdir_hg19, buildversion=buildversion)
+    #     logging.info('Extracted %d features from the false positive VCF file (hg19).', fp_data_hg19.shape[0])
+
+    #     # Concatenate the data from hg38 and hg19.
+    #     logging.info('Concatenating the data from hg38 and hg19.')
+    #     tp_data = pd.concat([tp_data, tp_data_hg19], ignore_index=True)
+    #     fp_data = pd.concat([fp_data, fp_data_hg19], ignore_index=True)
+
+    # else:
+    #     logging.info('No hg19 data provided. Using only hg38 data.')
+    # logging.info('Feature extraction completed. True positives: %d, False positives: %d',
+    #              tp_data.shape[0], fp_data.shape[0])
 
     # ---------------------------------------------------------------
     # Data Preprocessing
@@ -140,13 +203,13 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
 
     # Drop the genotype column from the data.
     logging.info('Dropping the genotype column from the data.')
-    tp_data.drop(columns=['genotype'], inplace=True, errors='ignore')
-    fp_data.drop(columns=['genotype'], inplace=True, errors='ignore')
+    tp_data = tp_data.drop(columns=['genotype'], errors='ignore')
+    fp_data = fp_data.drop(columns=['genotype'], errors='ignore')
 
     # Drop the cn_state column from the data.
     logging.info('Dropping the cn_state column from the data.')
-    tp_data.drop(columns=['cn_state'], inplace=True, errors='ignore')
-    fp_data.drop(columns=['cn_state'], inplace=True, errors='ignore')
+    tp_data = tp_data.drop(columns=['cn_state'], errors='ignore')
+    fp_data = fp_data.drop(columns=['cn_state'], errors='ignore')
 
     # Add the labels.
     tp_data['label'] = 1
@@ -158,23 +221,23 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
 
     # Drop NaN values from the data.
     logging.info('Dropping NaN values from the data.')
-    tp_data.dropna(inplace=True)
-    fp_data.dropna(inplace=True)
+    tp_data = tp_data.dropna()
+    fp_data = fp_data.dropna()
     logging.info('Number of true labels after dropping NaN values: %d', tp_data.shape[0])
     logging.info('Number of false labels after dropping NaN values: %d', fp_data.shape[0])
 
     # Balance the dataset by undersampling the true positives.
-    logging.info('Balancing the dataset by undersampling the true positives (count = %d) to match the false positives (count = %d)', tp_data.shape[0], fp_data.shape[0])
-    tp_data = tp_data.sample(fp_data.shape[0], random_state=42)
+    # logging.info('Balancing the dataset by undersampling the true positives (count = %d) to match the false positives (count = %d)', tp_data.shape[0], fp_data.shape[0])
+    # tp_data = tp_data.sample(fp_data.shape[0], random_state=42)
 
-    logging.info('Number of true labels after balancing: %d', tp_data.shape[0])
-    logging.info('Number of false labels after balancing: %d', fp_data.shape[0])
+    # logging.info('Number of true labels after balancing: %d', tp_data.shape[0])
+    # logging.info('Number of false labels after balancing: %d', fp_data.shape[0])
 
     # Combine the true positive and false positive data.
     data = pd.concat([tp_data, fp_data], ignore_index=True)  # Ignore the index to realign the indices.
 
     # Add interaction terms to the data.
-    data = add_interaction_terms(data)
+    # data = add_interaction_terms(data)
 
     # Drop columns not needed for training.
     # data.drop(columns=['chrom', 'start', 'end', 'sv_type_str'], inplace=True)
@@ -183,16 +246,17 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
     chrom_col = data.pop('chrom')
 
     # Drop columns that are not needed for training.
-    data.drop(columns=['start', 'end', 'sv_type_str'], inplace=True, errors='ignore')
+    data = data.drop(columns=['start', 'end', 'sv_type_str'], errors='ignore')
 
     # Drop the read_depth and cluster_size columns
-    # data.drop(columns=['read_depth', 'cluster_size'], inplace=True)
+    # data = data.drop(columns=['read_depth', 'cluster_size'], errors='ignore')
 
     logging.info('Columns list after preprocessing: %s', data.columns.tolist())
 
     # Print duplicate columns if any.
     duplicate_columns = data.columns[data.columns.duplicated()].tolist()
-    logging.info('Duplicate columns found: %s', duplicate_columns)
+    if duplicate_columns:
+        logging.warning('Duplicate columns found: %s', duplicate_columns)
 
     # Get the features and labels.
     features = data.drop(columns=['label'])
@@ -202,38 +266,41 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
     logging.info('Number of features: %d', features.shape[1])
     logging.info('Feature names: %s', features.columns.tolist())
 
-    # Train different models.
-    models = {
-        "Logistic Regression": LogisticRegression(),
-        "Random_Forest": RandomForestClassifier(n_estimators=100, random_state=42),
-        "XGBoost": XGBClassifier(use_label_encoder=False, eval_metric='logloss', enable_categorical=True),
-        "SVC": SVC(kernel='linear', class_weight='balanced', probability=True)
+    # Split the data into training and testing sets using stratified sampling to maintain the class balance.
+    X_train, X_test, y_train, y_test = train_test_split(features, labels, test_size=0.2, random_state=42, stratify=labels)
+    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    pipelines = {
+        "Logistic_Regression": Pipeline([('classifier', LogisticRegression(max_iter=1000, random_state=42))]),
+        "Random_Forest": Pipeline([('classifier', RandomForestClassifier(n_estimators=100, random_state=42))]),
+        "XGBoost": Pipeline([('classifier', XGBClassifier(n_estimators=100, use_label_encoder=False, eval_metric='logloss', random_state=42))]),
+        "SVC": Pipeline([('classifier', SVC(probability=True, random_state=42))])
+    }
+    param_grids = {
+        "Logistic_Regression": {
+            'classifier__C': [0.01, 0.1, 1, 10],
+            'classifier__penalty': ['l1', 'l2'],
+            'classifier__solver': ['liblinear']
+        },
+        "Random_Forest": {
+            'classifier__n_estimators': [100, 200],
+            'classifier__max_depth': [None, 10, 20],
+            'classifier__min_samples_split': [2, 5],
+            'classifier__min_samples_leaf': [1, 2]
+        },
+        "XGBoost": {
+            'classifier__n_estimators': [100, 200],
+            'classifier__max_depth': [3, 6],
+            'classifier__learning_rate': [0.01, 0.1],
+            'classifier__subsample': [0.8, 1]
+        },
+        "SVC": {
+            'classifier__C': [0.1, 1, 10],
+            'classifier__kernel': ['linear', 'rbf']
+        }
     }
 
-    train_full_data = False  # Set to True to train the full model with no split.
-    if train_full_data:
-        logging.info('Training the full model with no split.')
-        X_train, y_train = features, labels
 
-        # Use a dummy test set for evaluation.
-        X_test = features.sample(n=1000, random_state=42)  # Sample 1000 instances for testing.
-        y_test = labels.sample(n=1000, random_state=42)
-    else:
-        # Split the data into training and testing sets.
-        logging.info('Splitting the data into training and testing sets (0.8/0.2).')
-        X_train, X_test, y_train, y_test = train_test_split(features, labels, test_size=0.2, random_state=42)
-        logging.info('Data split completed. Training set size: %d, Testing set size: %d',
-                 X_train.shape[0], X_test.shape[0])
-    
-
-    for model_name, model in models.items():
-        model_name_fp = model_name.replace(" ", "_")
-
-        # Skip SVC
-        if model_name == "SVC":
-            logging.info('Skipping SVC model.')
-            continue
-        
+    for model_name, pipeline in pipelines.items():
         # Print the number of features.
         logging.info('Number of features: %d', X_train.shape[1])
         logging.info('Training set size: %d', X_train.shape[0])
@@ -246,30 +313,25 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
 
         # Print the number of true positives and false positives in the training
         # and testing sets.
-        logging.info('Number of true positives in the training set: %d', np.sum(y_train == 1))
-        logging.info('Number of false positives in the training set: %d', np.sum(y_train == 0))
-        logging.info('Number of true positives in the testing set: %d', np.sum(y_test == 1))
-        logging.info('Number of false positives in the testing set: %d', np.sum(y_test == 0))
+        logging.info('TP Training Count: %d', np.sum(y_train == 1))
+        logging.info('FP Training Count: %d', np.sum(y_train == 0))
+        logging.info('TP Testing Count: %d', np.sum(y_test == 1))
+        logging.info('FP Testing Count: %d', np.sum(y_test == 0))
         logging.info('Training set size: %d', X_train.shape[0])
         logging.info('Testing set size: %d', X_test.shape[0])
         logging.info('Number of features: %d', X_train.shape[1])
 
-        # If SVC, scale the data.
-        # if model_name == "SVC":
-        #     from sklearn.preprocessing import StandardScaler
-        #     scaler = StandardScaler()
-        #     X_train = scaler.fit_transform(X_train)
-        #     X_test = scaler.transform(X_test)
+        model_name_fp = model_name.replace(" ", "_")
 
-        # Train the model.
-        logging.info('Training the %s model.', model_name)
-        # model.fit(features, labels)
-        model.fit(X_train, y_train)
-        # model.fit(X_train, y_train, sample_weight=sample_weights)
+        # Perform grid search to find the best hyperparameters for the model, optimizing for precision to prioritize reducing false positives.
+        grid_search = GridSearchCV(estimator=pipeline, param_grid=param_grids[model_name], cv=cv, scoring='precision', n_jobs=-1)
+        grid_search.fit(X_train, y_train)
+        logging.info('Best hyperparameters for %s: %s', model_name, grid_search.best_params_)
 
         # Get predicted probabilities for the training and testing sets.
-        y_train_prob = model.predict_proba(X_train)[:, 1]
-        y_test_prob = model.predict_proba(X_test)[:, 1]
+        best_model = grid_search.best_estimator_
+        y_train_prob = best_model.predict_proba(X_train)[:, 1]
+        y_test_prob = best_model.predict_proba(X_test)[:, 1]
 
         # Compute the ROC curve and ROC area for the training set.
         fpr_train, tpr_train, _ = roc_curve(y_train, y_train_prob)
@@ -400,6 +462,7 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
         logging.info('Number of features: %d', len(feature_names))
 
         # Continue if not running SHAP analysis.
+        logging.info('Continuing to the next model without SHAP analysis for %s.\n\n', model_name)
         continue
 
         # Feature importance for Random_Forest and XGBoost.
@@ -660,16 +723,68 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
     f1_scores = {}
     precision_scores = {}
     recall_scores = {}
-    for model_name, model in models.items():
-        # Skip SVC
-        if model_name == "SVC":
-            logging.info('Skipping SVC model for cross-validation analysis.')
-            continue
+    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    pipelines = {
+        "Logistic Regression": Pipeline([
+            ('scaler', StandardScaler()),
+            ('classifier', LogisticRegression())
+        ]),
+        "Random_Forest": Pipeline([
+            ('classifier', RandomForestClassifier(n_estimators=100, random_state=42))
+        ]),
+        "XGBoost": Pipeline([
+            ('classifier', XGBClassifier(use_label_encoder=False, eval_metric='logloss', enable_categorical=True))
+        ]),
+        "SVC": Pipeline([
+            ('scaler', StandardScaler()),
+            ('classifier', SVC(kernel='linear', class_weight='balanced', probability=True))
+        ])
+    }
 
-        # Skip all but XGBoost
-        if model_name != "XGBoost":
-            logging.info('Skipping %s model for cross-validation analysis.', model_name)
-            continue
+    # =================================================================
+    # Hyperparameter grids
+    # =================================================================
+    param_grids = {
+        "Logistic Regression": {
+            'classifier__C': [0.01, 0.1, 1, 10, 100],
+            'classifier__penalty': ['l1', 'l2'],
+            'classifier__solver': ['liblinear']
+        },
+        "Random_Forest": {
+            'classifier__n_estimators': [50, 100, 200],
+            'classifier__max_depth': [None, 10, 20],
+            'classifier__min_samples_split': [2, 5, 10]
+        },
+        "XGBoost": {
+            'classifier__n_estimators': [50, 100, 200],
+            'classifier__max_depth': [3, 6, 9],
+            'classifier__learning_rate': [0.1, 0.2, 0.3]
+        },
+        "SVC": {
+            'classifier__C': [0.1, 1.0, 10.0],
+            'classifier__kernel': ['linear', 'rbf'],
+            'classifier__gamma': ['scale', 'auto']
+        }
+    }
+
+    for name in pipelines.keys():
+        logging.info(f"\n=============================")
+        logging.info(f"Training pipeline: {name}")
+        logging.info(f"==============================\n")
+        pipe = pipelines[name]
+        grid = param_grids[name]
+        grid_search = GridSearchCV(pipe, grid, cv=cv, scoring='f1', n_jobs=-1)
+        grid_search.fit(features, labels)
+        logging.info(f"Best parameters for {name}: {grid_search.best_params_}")
+        # # Skip SVC
+        # if model_name == "SVC":
+        #     logging.info('Skipping SVC model for cross-validation analysis.')
+        #     continue
+
+        # # Skip all but XGBoost
+        # if model_name != "XGBoost":
+        #     logging.info('Skipping %s model for cross-validation analysis.', model_name)
+        #     continue
 
         # Dictionary with number of SVs in the training set for each chromosome.
         sv_counts = {chrom: features[chrom_col == chrom].shape[0] for chrom in chromosomes}
@@ -792,26 +907,25 @@ def train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, t
             plt.close()
             logging.info('Saved the %s plot to %s', metric, score_plot_path)
 
-def run(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, tp_bed_hg19=None, fp_bed_hg19=None):
-    """Run the training process."""
-    train(tp_bed, fp_bed, output_directory, annovar_path, db_path, outdiranno, tp_bed_hg19, fp_bed_hg19)
-
-
 if __name__ == '__main__':
     # Parse the command line arguments.
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--tpbed", required=True, help="Directory containing true positive SVs in hg38")
-    parser.add_argument("--fpbed", required=True, help="Directory containing false positive SVs in hg38")
-    parser.add_argument("--tpbed_hg19", required=False, help="Directory containing true positive SVs in hg19")
-    parser.add_argument("--fpbed_hg19", required=False, help="Directory containing false positive SVs in hg19")
+    parser.add_argument("--tp_hg002_grch37", required=True, help="Path to the true positive BED file for HG002 in GRCh37")
+    parser.add_argument("--fp_hg002_grch37", required=True, help="Path to the false positive BED file for HG002 in GRCh37")
+    parser.add_argument("--tp_visor_grch38", required=True, help="Path to the true positive BED file for Visor in GRCh38")
+    parser.add_argument("--fp_visor_grch38", required=True, help="Path to the false positive BED file for Visor in GRCh38")
+    parser.add_argument("--tp_platinum_grch38", required=True, help="Path to the true positive BED file for Platinum in GRCh38")
+    parser.add_argument("--fp_platinum_grch38", required=True, help="Path to the false positive BED file for Platinum in GRCh38")
     parser.add_argument("--outdiranno", required=True, help="Output directory for saving the ANNOVAR annotations")
     parser.add_argument("--outdir", required=True, help="Output directory for saving the model")
     parser.add_argument("--annovar", required=True, help="Path to ANNOVAR")
     parser.add_argument("--annovar_db", required=True, help="Path to ANNOVAR database")
+    parser.add_argument("--leave_out", required=True, help="Which dataset to leave out for training")
     args = parser.parse_args()
 
     # Run the program.
     logging.info('Training the model...')
-    run(args.tpbed, args.fpbed, args.outdir, args.annovar, args.annovar_db, args.outdiranno, args.tpbed_hg19, args.fpbed_hg19)
+    train(args.tp_hg002_grch37, args.fp_hg002_grch37, args.tp_visor_grch38, args.fp_visor_grch38, args.tp_platinum_grch38, args.fp_platinum_grch38, args.outdir, args.annovar, args.annovar_db, args.outdiranno, args.leave_out)
     logging.info('done.')
+
