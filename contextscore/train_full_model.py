@@ -88,7 +88,7 @@ def balance_tp_fp_datasets(tp_data, fp_data):
 
     return tp_data, fp_data
 
-def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp_platinum_grch38, fp_platinum_grch38, output_directory, annovar_path, db_path, outdiranno, tp_bed_hg19=None, fp_bed_hg19=None, leave_out=None):
+def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp_platinum_grch38, fp_platinum_grch38, output_directory, annovar_path, db_path, outdiranno, leave_out="none", split_80_20=False):
     """Train the binary classification model."""
 
     # ---------------------------------------------------------------
@@ -265,16 +265,28 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
     # Print the number of features.
     logging.info('Number of features: %d', features.shape[1])
     logging.info('Feature names: %s', features.columns.tolist())
+    if split_80_20:
+        # Split the data into training and testing sets using stratified sampling to maintain the class balance.
+        logging.info('Splitting the data into training and testing sets using an 80-20 split with stratified sampling to maintain class balance.')
+        X_train, X_test, y_train, y_test = train_test_split(features, labels, test_size=0.2, random_state=42, stratify=labels)
+    else:
+        # Use all the data for training and testing. We will use cross-validation to evaluate the model performance.
+        logging.info('Using all the data for training and testing. Cross-validation will be used to evaluate the model performance.')
+        X_train, y_train = features, labels
+        X_test, y_test = features, labels
 
-    # Split the data into training and testing sets using stratified sampling to maintain the class balance.
-    X_train, X_test, y_train, y_test = train_test_split(features, labels, test_size=0.2, random_state=42, stratify=labels)
-    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-    pipelines = {
-        "Logistic_Regression": Pipeline([('classifier', LogisticRegression(max_iter=1000, random_state=42))]),
-        "Random_Forest": Pipeline([('classifier', RandomForestClassifier(n_estimators=100, random_state=42))]),
-        "XGBoost": Pipeline([('classifier', XGBClassifier(n_estimators=100, use_label_encoder=False, eval_metric='logloss', random_state=42))]),
-        "SVC": Pipeline([('classifier', SVC(probability=True, random_state=42))])
-    }
+    # If not 80/20 split, use XGBoost only (highest performing model) to save time.
+    if split_80_20:
+        pipelines = {
+            "Logistic_Regression": Pipeline([('classifier', LogisticRegression(max_iter=1000, random_state=42))]),
+            "Random_Forest": Pipeline([('classifier', RandomForestClassifier(n_estimators=100, random_state=42))]),
+            "XGBoost": Pipeline([('classifier', XGBClassifier(n_estimators=100, eval_metric='logloss', random_state=42, enable_categorical=True))])
+        }
+    else:
+        pipelines = {
+            "XGBoost": Pipeline([('classifier', XGBClassifier(n_estimators=100, eval_metric='logloss', random_state=42, enable_categorical=True))])
+        }
+
     param_grids = {
         "Logistic_Regression": {
             'classifier__C': [0.01, 0.1, 1, 10],
@@ -292,36 +304,16 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
             'classifier__max_depth': [3, 6],
             'classifier__learning_rate': [0.01, 0.1],
             'classifier__subsample': [0.8, 1]
-        },
-        "SVC": {
-            'classifier__C': [0.1, 1, 10],
-            'classifier__kernel': ['linear', 'rbf']
         }
     }
 
-
+    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
     for model_name, pipeline in pipelines.items():
-        # Print the number of features.
-        logging.info('Number of features: %d', X_train.shape[1])
-        logging.info('Training set size: %d', X_train.shape[0])
-        logging.info('Testing set size: %d', X_test.shape[0])
+        logging.info('Training the %s model.', model_name)
+        model_name_fp = "contextscore_" + model_name.lower() + "_leaveout_" + leave_out
 
-        # Print the feature names.
-        feature_names = features.columns.tolist()
-        logging.info('Feature names: %s', feature_names)
-        logging.info('Number of features: %d', len(feature_names))
-
-        # Print the number of true positives and false positives in the training
-        # and testing sets.
-        logging.info('TP Training Count: %d', np.sum(y_train == 1))
-        logging.info('FP Training Count: %d', np.sum(y_train == 0))
-        logging.info('TP Testing Count: %d', np.sum(y_test == 1))
-        logging.info('FP Testing Count: %d', np.sum(y_test == 0))
-        logging.info('Training set size: %d', X_train.shape[0])
-        logging.info('Testing set size: %d', X_test.shape[0])
-        logging.info('Number of features: %d', X_train.shape[1])
-
-        model_name_fp = model_name.replace(" ", "_")
+        if split_80_20:
+            model_name_fp += "_80_20_split"
 
         # Perform grid search to find the best hyperparameters for the model, optimizing for precision to prioritize reducing false positives.
         grid_search = GridSearchCV(estimator=pipeline, param_grid=param_grids[model_name], cv=cv, scoring='precision', n_jobs=-1)
@@ -330,106 +322,69 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
 
         # Get predicted probabilities for the training and testing sets.
         best_model = grid_search.best_estimator_
-        y_train_prob = best_model.predict_proba(X_train)[:, 1]
-        y_test_prob = best_model.predict_proba(X_test)[:, 1]
 
-        # Compute the ROC curve and ROC area for the training set.
-        fpr_train, tpr_train, _ = roc_curve(y_train, y_train_prob)
-        roc_auc_train = auc(fpr_train, tpr_train)
+        # Save plots only for 80-20 split since the ROC curve will be overly optimistic when using all the data for training and testing.
+        if split_80_20:
+            y_train_prob = best_model.predict_proba(X_train)[:, 1]
+            y_test_prob = best_model.predict_proba(X_test)[:, 1]
 
-        # Compute the ROC curve and ROC area for the testing set.
-        fpr_test, tpr_test, thresholds = roc_curve(y_test, y_test_prob)
-        roc_auc_test = auc(fpr_test, tpr_test)
+            # Compute the ROC curve and ROC area for the training set.
+            fpr_train, tpr_train, _ = roc_curve(y_train, y_train_prob)
+            roc_auc_train = auc(fpr_train, tpr_train)
 
-        # Use Youden's J statistic to find the optimal threshold.
-        # j_scores = tpr_test - fpr_test
-        # optimal_idx = np.argmax(j_scores)
-        # optimal_threshold = thresholds[optimal_idx]
-        # logging.info('Optimal threshold (Youden\'s J statistic): %f', optimal_threshold)
-        # logging.info('True positive rate (sensitivity): %f', tpr_test[optimal_idx])
-        # logging.info('False positive rate (1 - specificity): %f', fpr_test[optimal_idx])
+            # Compute the ROC curve and ROC area for the testing set.
+            fpr_test, tpr_test, thresholds = roc_curve(y_test, y_test_prob)
+            roc_auc_test = auc(fpr_test, tpr_test)
 
-        # Print the ROC AUC scores.
-        logging.info('ROC AUC score for the training set: %f', roc_auc_train)
-        logging.info('ROC AUC score for the testing set: %f', roc_auc_test)
+            # Print the ROC AUC scores.
+            logging.info('ROC AUC score for the training set: %f', roc_auc_train)
+            logging.info('ROC AUC score for the testing set: %f', roc_auc_test)
 
-        # Plot the ROC curve for the training set.
-        plt.figure()
-        plt.plot(fpr_train, tpr_train, color='blue', lw=2, label='ROC curve (area = %0.3f)' % roc_auc_train)
-        # plt.plot(fpr, tpr, color='darkorange', lw=2, label='ROC curve (area = %0.2f)' % roc_auc)
-        plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
-        plt.xlim([0.0, 1.0])
-        plt.ylim([0.0, 1.05])
-        plt.xlabel('False Positive Rate')
-        plt.ylabel('True Positive Rate')
-        model_name_label = model_name.replace("_", " ")
-        plt.title('{} Receiver Operating Characteristic (Training Set)'.format(model_name_label))
-        plt.legend(loc='lower right')
-        # Save the plot to the output directory.
-        roc_plot_path = os.path.join(output_directory, model_name_fp + '_roc_curve.png')
-        plt.savefig(roc_plot_path)
-        plt.close()
-        logging.info('Saved the ROC curve to %s', roc_plot_path)
+            # Plot the ROC curve for the training set.
+            plt.figure()
+            plt.plot(fpr_train, tpr_train, color='blue', lw=2, label='ROC curve (area = %0.3f)' % roc_auc_train)
+            # plt.plot(fpr, tpr, color='darkorange', lw=2, label='ROC curve (area = %0.2f)' % roc_auc)
+            plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+            plt.xlim([0.0, 1.0])
+            plt.ylim([0.0, 1.05])
+            plt.xlabel('False Positive Rate')
+            plt.ylabel('True Positive Rate')
+            model_name_label = model_name.replace("_", " ")
+            plt.title('{} Receiver Operating Characteristic (Training Set)'.format(model_name_label))
+            plt.legend(loc='lower right')
+            # Save the plot to the output directory.
+            roc_plot_path = os.path.join(output_directory, model_name_fp + '_roc_curve.png')
+            plt.savefig(roc_plot_path)
+            plt.close()
+            logging.info('Saved the ROC curve to %s', roc_plot_path)
 
-        # Plot the ROC curve for the testing set.
-        plt.figure()
-        plt.plot(fpr_test, tpr_test, color='blue', lw=2, label='ROC curve (area = %0.3f)' % roc_auc_test)
-        plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
-        plt.xlim([0.0, 1.0])
-        plt.ylim([0.0, 1.05])
-        plt.xlabel('False Positive Rate')
-        plt.ylabel('True Positive Rate')
-        plt.title('{} Receiver Operating Characteristic (Testing Set)'.format(model_name_label))
-        plt.legend(loc='lower right')
-        # Save the plot to the output directory.
-        roc_plot_path = os.path.join(output_directory, model_name + '_roc_curve_test.png')
-        plt.savefig(roc_plot_path)
-        plt.close()
-        logging.info('Saved the ROC curve to %s', roc_plot_path)
+            # Plot the ROC curve for the testing set.
+            plt.figure()
+            plt.plot(fpr_test, tpr_test, color='blue', lw=2, label='ROC curve (area = %0.3f)' % roc_auc_test)
+            plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+            plt.xlim([0.0, 1.0])
+            plt.ylim([0.0, 1.05])
+            plt.xlabel('False Positive Rate')
+            plt.ylabel('True Positive Rate')
+            plt.title('{} Receiver Operating Characteristic (Testing Set)'.format(model_name_label))
+            plt.legend(loc='lower right')
+            # Save the plot to the output directory.
+            roc_plot_path = os.path.join(output_directory, model_name + '_roc_curve_test.png')
+            plt.savefig(roc_plot_path)
+            plt.close()
+            logging.info('Saved the ROC curve to %s', roc_plot_path)
+        else:
+            # Save the model to the output directory as a pickle file.
+            model_path = os.path.join(output_directory, model_name_fp + '_model.pkl')
+            joblib.dump(best_model, model_path)
+            logging.info('Saved the %s model to %s', model_name, model_path)
 
-        # Compute precision-recall curve
-        # precision, recall, thresholds_pr = precision_recall_curve(y_test, y_test_prob)
 
-        # logging.info('precision size: %d', len(precision))
-        # logging.info('recall size: %d', len(recall))
-        # logging.info('thresholds size: %d', len(thresholds_pr))
+        # Continue if not running SHAP analysis.
+        logging.info('Completed training and evaluation for %s. Continuing to the next model.', model_name)
+        continue
 
-        # # Plot Recall vs Thresholds
-        # plt.figure()
-        # plt.plot(thresholds_pr, recall[1:], color='blue', lw=2, label='Recall')
-        # plt.xlabel('Threshold')
-        # plt.ylabel('Recall')
-        # plt.title('%s Recall vs Thresholds' % model_name)
-        # # plt.legend(loc='lower right')
-
-        # # Remove the legend
-        # plt.legend().remove()
-
-        # # Save the plot to the output directory.
-        # recall_plot_path = os.path.join(output_directory, model_name_fp + '_recall_vs_thresholds.png')
-        # plt.savefig(recall_plot_path)
-        # plt.close()
-        # logging.info('Saved the Recall vs Thresholds plot to %s', recall_plot_path)
-
-        # # Plot Precision vs Thresholds
-        # plt.figure()
-        # plt.plot(thresholds_pr, precision[1:], color='blue', lw=2, label='Precision')
-        # plt.xlabel('Threshold')
-        # plt.ylabel('Precision')
-        # plt.title('%s Precision vs Thresholds' % model_name)
-        # # plt.legend(loc='lower right')
-        # # Remove the legend
-        # plt.legend().remove()
-        # # Save the plot to the output directory.
-        # precision_plot_path = os.path.join(output_directory, model_name_fp + '_precision_vs_thresholds.png')
-        # plt.savefig(precision_plot_path)
-        # plt.close()
-        # logging.info('Saved the Precision vs Thresholds plot to %s', precision_plot_path)
-
-        # Get the feature names.
-        feature_names = features.columns.tolist()
-
-        # Create a dictionary of feature names and their labels.
+        # Feature importance for Random_Forest and XGBoost
         feature_name_dict = {
             "aln_type": "Alignment Type",
             "aln_type_hmm": "HMM Prediction",
@@ -458,14 +413,6 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
         # Map the feature names to their labels.
         feature_names = [feature_name_dict.get(name, name) for name in feature_names]
 
-        logging.info('Feature names: %s', feature_names)
-        logging.info('Number of features: %d', len(feature_names))
-
-        # Continue if not running SHAP analysis.
-        logging.info('Continuing to the next model without SHAP analysis for %s.\n\n', model_name)
-        continue
-
-        # Feature importance for Random_Forest and XGBoost.
         if model_name in ["Random_Forest", "XGBoost"]:
             # Get feature importances.
             importances = model.feature_importances_
@@ -704,7 +651,7 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
         # logging.info('Mean cross-validation score: %f', scores.mean())
 
     # Exit early if not running per-chromosome cross-validation analysis.
-    sys.exit(0)
+    return
 
     # Run a cross-validation analysis splitting the data by chromosome.
     logging.info('Running cross-validation analysis splitting the data by chromosome.')
@@ -733,7 +680,7 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
             ('classifier', RandomForestClassifier(n_estimators=100, random_state=42))
         ]),
         "XGBoost": Pipeline([
-            ('classifier', XGBClassifier(use_label_encoder=False, eval_metric='logloss', enable_categorical=True))
+            ('classifier', XGBClassifier(eval_metric='logloss', enable_categorical=True))
         ]),
         "SVC": Pipeline([
             ('scaler', StandardScaler()),
@@ -922,10 +869,11 @@ if __name__ == '__main__':
     parser.add_argument("--annovar", required=True, help="Path to ANNOVAR")
     parser.add_argument("--annovar_db", required=True, help="Path to ANNOVAR database")
     parser.add_argument("--leave_out", required=True, help="Which dataset to leave out for training")
+    parser.add_argument("--split_80_20", action='store_true', help="Whether to split the data into training and testing sets using an 80-20 split. If not specified, all the data will be used for training and testing, and cross-validation will be used to evaluate the model performance.")
     args = parser.parse_args()
 
     # Run the program.
-    logging.info('Training the model...')
-    train(args.tp_hg002_grch37, args.fp_hg002_grch37, args.tp_visor_grch38, args.fp_visor_grch38, args.tp_platinum_grch38, args.fp_platinum_grch38, args.outdir, args.annovar, args.annovar_db, args.outdiranno, args.leave_out)
+    logging.info('Training the model, split_80_20 = %s.', args.split_80_20)
+    train(args.tp_hg002_grch37, args.fp_hg002_grch37, args.tp_visor_grch38, args.fp_visor_grch38, args.tp_platinum_grch38, args.fp_platinum_grch38, args.outdir, args.annovar, args.annovar_db, args.outdiranno, args.leave_out, args.split_80_20)
     logging.info('done.')
 
