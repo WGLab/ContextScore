@@ -237,7 +237,7 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
     data = pd.concat([tp_data, fp_data], ignore_index=True)  # Ignore the index to realign the indices.
 
     # Add interaction terms to the data.
-    data = add_interaction_terms(data)
+    # data = add_interaction_terms(data)
 
     # Drop columns not needed for training.
     # data.drop(columns=['chrom', 'start', 'end', 'sv_type_str'], inplace=True)
