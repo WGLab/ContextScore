@@ -45,13 +45,9 @@ Example:
 """
 
 import os
-import sys
-import subprocess
 import logging
-import numpy as np
 import joblib
 import pandas as pd
-from io import StringIO
 
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression
@@ -61,11 +57,11 @@ from sklearn.model_selection import GridSearchCV, StratifiedKFold
 from xgboost import XGBClassifier
 from sklearn.svm import SVC
 
-import matplotlib.pyplot as plt
+# Import SHAP for model interpretation.
+import shap
+from sklearn.metrics import roc_curve, auc
 
-from sklearn.metrics import roc_curve, auc, precision_recall_curve, confusion_matrix, classification_report
 import matplotlib.pyplot as plt
-import seaborn as sns
 
 from extract_features import extract_features, add_interaction_terms, normalize_column
 
@@ -96,6 +92,7 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
     # ---------------------------------------------------------------
 
     # Set paths to none if leave_out is set to the corresponding dataset
+    no_leave_out = False
     if leave_out == "hg002":
         logging.info('Leaving out HG002 dataset from training.')
         tp_hg002_grch37 = None
@@ -108,6 +105,9 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
         logging.info('Leaving out Platinum Pedigree dataset from training.')
         tp_platinum_grch38 = None
         fp_platinum_grch38 = None
+    else:
+        logging.info('Not leaving out any dataset from training.')
+        no_leave_out = True
 
     # ===============================================================
     # Extract the features from the VCF files.
@@ -117,59 +117,20 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
     buildversion = 'hg38'
     tp_visor_anno = extract_features(tp_visor_grch38, annovar_path, db_path, os.path.join(outdiranno, "tp_anno_grch38"), buildversion=buildversion) if tp_visor_grch38 is not None else None
     fp_visor_anno = extract_features(fp_visor_grch38, annovar_path, db_path, os.path.join(outdiranno, "fp_anno_grch38"), buildversion=buildversion) if fp_visor_grch38 is not None else None
-    # Balance datasets before concatenation. This is important to prevent the model from being biased towards the class with more samples.
-    # if tp_visor_anno is not None and fp_visor_anno is not None:
-        # tp_visor_anno, fp_visor_anno = balance_tp_fp_datasets(tp_visor_anno, fp_visor_anno)
     
     tp_platinum_anno = extract_features(tp_platinum_grch38, annovar_path, db_path, os.path.join(outdiranno, "tp_anno_grch38"), buildversion=buildversion) if tp_platinum_grch38 is not None else None
     fp_platinum_anno = extract_features(fp_platinum_grch38, annovar_path, db_path, os.path.join(outdiranno, "fp_anno_grch38"), buildversion=buildversion) if fp_platinum_grch38 is not None else None
-    # Balance datasets before concatenation.
-    # if tp_platinum_anno is not None and fp_platinum_anno is not None:
-        # tp_platinum_anno, fp_platinum_anno = balance_tp_fp_datasets(tp_platinum_anno, fp_platinum_anno)
 
     # HG002 data (GRCh37).
     logging.info('Extracting features from the true positive and false positive VCF files (HG002-GRCh37).')
     buildversion = 'hg19'
     tp_hg002_anno = extract_features(tp_hg002_grch37, annovar_path, db_path, os.path.join(outdiranno, "tp_anno_grch37"), buildversion=buildversion) if tp_hg002_grch37 is not None else None
     fp_hg002_anno = extract_features(fp_hg002_grch37, annovar_path, db_path, os.path.join(outdiranno, "fp_anno_grch37"), buildversion=buildversion) if fp_hg002_grch37 is not None else None
-    # Balance datasets before concatenation.
-    # if tp_hg002_anno is not None and fp_hg002_anno is not None:
-        # tp_hg002_anno, fp_hg002_anno = balance_tp_fp_datasets(tp_hg002_anno, fp_hg002_anno)
 
     # Concatenate the data from all datasets.
     logging.info('Concatenating the data from all datasets.')
     tp_data = pd.concat([df for df in [tp_visor_anno, tp_platinum_anno, tp_hg002_anno] if df is not None], ignore_index=True)
     fp_data = pd.concat([df for df in [fp_visor_anno, fp_platinum_anno, fp_hg002_anno] if df is not None], ignore_index=True)
-
-    # Extract the features from the VCF files.
-    # logging.info('Extracting features from the true positive and false positive VCF files (GRCh38).')
-    # buildversion = 'hg38'
-    # tp_anno_outdir = os.path.join(outdiranno, "tp_anno")
-    # tp_data = extract_features(tp_bed, annovar_path, db_path, tp_anno_outdir, buildversion=buildversion)
-    # logging.info('Extracted %d features from the true positive VCF file.', tp_data.shape[0])
-    # fp_anno_outdir = os.path.join(outdiranno, "fp_anno")
-    # fp_data = extract_features(fp_bed, annovar_path, db_path, fp_anno_outdir, buildversion=buildversion)
-    # logging.info('Extracted %d features from the false positive VCF file.', fp_data.shape[0])
-
-    # logging.info('Extracting features from the true positive and false positive VCF files (HG002-GRCh19).')
-    # buildversion = 'hg19'
-    # if tp_bed_hg19 is not None and fp_bed_hg19 is not None:
-    #     tp_anno_outdir_hg19 = os.path.join(outdiranno, "tp_anno_hg19")
-    #     tp_data_hg19 = extract_features(tp_bed_hg19, annovar_path, db_path, tp_anno_outdir_hg19, buildversion=buildversion)
-    #     logging.info('Extracted %d features from the true positive VCF file (hg19).', tp_data_hg19.shape[0])
-    #     fp_anno_outdir_hg19 = os.path.join(outdiranno, "fp_anno_hg19")
-    #     fp_data_hg19 = extract_features(fp_bed_hg19, annovar_path, db_path, fp_anno_outdir_hg19, buildversion=buildversion)
-    #     logging.info('Extracted %d features from the false positive VCF file (hg19).', fp_data_hg19.shape[0])
-
-    #     # Concatenate the data from hg38 and hg19.
-    #     logging.info('Concatenating the data from hg38 and hg19.')
-    #     tp_data = pd.concat([tp_data, tp_data_hg19], ignore_index=True)
-    #     fp_data = pd.concat([fp_data, fp_data_hg19], ignore_index=True)
-
-    # else:
-    #     logging.info('No hg19 data provided. Using only hg38 data.')
-    # logging.info('Feature extraction completed. True positives: %d, False positives: %d',
-    #              tp_data.shape[0], fp_data.shape[0])
 
     # ---------------------------------------------------------------
     # Data Preprocessing
@@ -211,6 +172,11 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
     tp_data = tp_data.drop(columns=['cn_state'], errors='ignore')
     fp_data = fp_data.drop(columns=['cn_state'], errors='ignore')
 
+    # Drop SV length features since they are highly correlated with the SV type feature and may lead to overfitting.
+    # logging.info('Dropping SV length feature from the data.')
+    # tp_data = tp_data.drop(columns=['sv_length'], errors='ignore')
+    # fp_data = fp_data.drop(columns=['sv_length'], errors='ignore')
+
     # Add the labels.
     tp_data['label'] = 1
     fp_data['label'] = 0
@@ -235,12 +201,6 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
 
     # Combine the true positive and false positive data.
     data = pd.concat([tp_data, fp_data], ignore_index=True)  # Ignore the index to realign the indices.
-
-    # Add interaction terms to the data.
-    # data = add_interaction_terms(data)
-
-    # Drop columns not needed for training.
-    # data.drop(columns=['chrom', 'start', 'end', 'sv_type_str'], inplace=True)
 
     # Pop the chrom column to use it later for cross-validation.
     chrom_col = data.pop('chrom')
@@ -280,11 +240,11 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
         pipelines = {
             "Logistic_Regression": Pipeline([('classifier', LogisticRegression(max_iter=1000, random_state=42))]),
             "Random_Forest": Pipeline([('classifier', RandomForestClassifier(n_estimators=100, random_state=42))]),
-            "XGBoost": Pipeline([('classifier', XGBClassifier(n_estimators=100, eval_metric='logloss', random_state=42, enable_categorical=True))])
+            "XGBoost": Pipeline([('classifier', XGBClassifier(n_estimators=100, eval_metric='logloss', random_state=42, enable_categorical=False))])
         }
     else:
         pipelines = {
-            "XGBoost": Pipeline([('classifier', XGBClassifier(n_estimators=100, eval_metric='logloss', random_state=42, enable_categorical=True))])
+            "XGBoost": Pipeline([('classifier', XGBClassifier(n_estimators=100, eval_metric='logloss', random_state=42, enable_categorical=False))])
         }
 
     param_grids = {
@@ -300,7 +260,7 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
             'classifier__min_samples_leaf': [1, 2]
         },
         "XGBoost": {
-            'classifier__n_estimators': [100, 200],
+            'classifier__n_estimators': [150, 250],  # Slightly more trees
             'classifier__max_depth': [3, 6],
             'classifier__learning_rate': [0.01, 0.1],
             'classifier__subsample': [0.8, 1]
@@ -316,8 +276,18 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
             model_name_fp += "_80_20_split"
 
         # Perform grid search to find the best hyperparameters for the model, optimizing for precision to prioritize reducing false positives.
+        # Convert categorical columns to numeric
+        X_train_processed = X_train.copy()
+        for col in X_train_processed.columns:
+            if X_train_processed[col].dtype == 'category':
+                X_train_processed[col] = X_train_processed[col].cat.codes
+            elif X_train_processed[col].dtype == 'object':
+                X_train_processed[col] = pd.to_numeric(X_train_processed[col], errors='coerce')
+
+        X_train_processed = X_train_processed.fillna(0).astype('float64')
+
         grid_search = GridSearchCV(estimator=pipeline, param_grid=param_grids[model_name], cv=cv, scoring='precision', n_jobs=-1)
-        grid_search.fit(X_train, y_train)
+        grid_search.fit(X_train_processed, y_train)
         logging.info('Best hyperparameters for %s: %s', model_name, grid_search.best_params_)
 
         # Get predicted probabilities for the training and testing sets.
@@ -380,478 +350,48 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
             logging.info('Saved the %s model to %s', model_name, model_path)
 
 
-        # Continue if not running SHAP analysis.
-        logging.info('Completed training and evaluation for %s. Continuing to the next model.', model_name)
+        logging.info('Completed training and evaluation for %s model.', model_name)
 
-        # # Feature importance for Random_Forest and XGBoost
-        # feature_name_dict = {
-        #     "aln_type": "Alignment Type",
-        #     "aln_type_hmm": "HMM Prediction",
-        #     "simpleRepeat": "Simple Repeat",
-        #     "segdup": "Segmental Duplications",
-        #     "cluster_size": "Cluster Size",
-        #     "read_depth": "Read Depth",
-        #     "aln_offset": "Alignment Offset",
-        #     "hmm_llh": "HMM Log Likelihood",
-        #     "phastCons": "PhastCons Conservation Score",
-        #     "sv_length": "Structural Variant Length",
-        #     "sv_type": "Structural Variant Type",
-        #     "fragile_site": "Fragile Site",
-        #     "centromere": "Centromere",
-        #     "telomere": "Telomere",
-        #     "call_type": "Alignment Type",
-        #     "simple_repeat_cs": "Simple Repeat x Cluster Size",
-        #     "simple_repeat_rd": "Simple Repeat x Read Depth",
-        #     "cs_hmm": "Cluster Size x HMM LLH",
-        #     "fragile_site_cs": "Fragile Site x Cluster Size",
-        #     "fragile_site_rd": "Fragile Site x Read Depth",
-        #     "segdup_cs": "Seg. Dup. x Cluster Size",
-        #     "segdup_rd": "Seg. Dup. x Read Depth"
-        # }
+        # Run SHAP if full analysis and no leave-outs (SHAP is slow)
+        if not split_80_20 and no_leave_out:
+            # SHAP doesn't support XGBoost with categorical features directly,
+            # so we need to use their suggested workaround.
+            classifier = best_model.named_steps['classifier']
 
-        # # Map the feature names to their labels.
-        # feature_names = [feature_name_dict.get(name, name) for name in feature_names]
+            # Prepare numeric data for SHAP
+            X_train_numeric = X_train.copy()
+            for col in X_train_numeric.columns:
+                if X_train_numeric[col].dtype == 'object':
+                    X_train_numeric[col] = pd.to_numeric(X_train_numeric[col], errors='coerce')
 
-        # if model_name in ["Random_Forest", "XGBoost"]:
-        #     # Get feature importances.
-        #     importances = model.feature_importances_
+            X_train_numeric = X_train_numeric.fillna(0).astype('float64')
 
-        #     # Sort the feature importances in descending order.
-        #     indices = np.argsort(importances)[::-1]
-        #     top_features = [feature_names[i] for i in indices]
-        #     top_importances = [importances[i] for i in indices]
+            # Use a larger background sample to cover all tree leaves
+            sample_size = min(5000, len(X_train_numeric))  # Larger sample
+            X_background = shap.sample(X_train_numeric, sample_size, random_state=42)
 
-        #     # Print the feature ranking.
-        #     logging.info('Feature ranking:')
-        #     for f in range(X_train.shape[1]):
-        #         logging.info('%d. Feature %s (%f)', f + 1, feature_names[indices[f]], importances[indices[f]])
+            # Create explainer and calculate SHAP values
+            explainer = shap.TreeExplainer(classifier, X_background)
 
-        #     # Plot the feature importances.
-        #     plt.figure()
-        #     plt.title('XGBoost Feature Importances')
-        #     plt.bar(range(len(top_features)), top_importances, align='center')
-        #     plt.xticks(range(len(top_features)), top_features, rotation=45, ha='right')
-        #     # plt.bar(range(X_train.shape[1]), importances[indices], align='center')
-        #     # plt.xticks(range(X_train.shape[1]), indices)
-        #     # plt.xlim([-1, X_train.shape[1]])
+            # Calculate SHAP values
+            shap_values = explainer.shap_values(X_train_numeric)
 
-        #     # Set the x ticks as the feature names
-        #     # plt.xticks(range(X_train.shape[1]), [feature_names[i] for i in indices], rotation=45)
-        #     # plt.xlim([-1, X_train.shape[1]])
-        #     plt.xlabel('')
-        #     plt.ylabel('Importance')
-        #     plt.tight_layout()
+            # 1. Summary plot (existing)
+            plt.figure(figsize=(10, 8))
+            shap.summary_plot(shap_values, X_train_numeric, show=False)
+            shap_plot_path = os.path.join(output_directory, model_name_fp + '_shap_summary_plot.png')
+            plt.savefig(shap_plot_path, dpi=300, bbox_inches='tight')
+            plt.close()
+            logging.info('Saved the SHAP summary plot to %s', shap_plot_path)
 
-        #     # Save the plot to the output directory.
-        #     importance_plot_path = os.path.join(output_directory, model_name_fp + '_feature_importances.png')
-        #     plt.savefig(importance_plot_path, bbox_inches='tight')
-        #     plt.close()
-        #     logging.info('Saved the feature importances plot to %s', importance_plot_path)
+            # 2. Bar plot showing mean absolute SHAP values (feature importance)
+            plt.figure(figsize=(10, 8))
+            shap.summary_plot(shap_values, X_train_numeric, plot_type="bar", show=False)
+            bar_plot_path = os.path.join(output_directory, model_name_fp + '_shap_importance_plot.png')
+            plt.savefig(bar_plot_path, dpi=300, bbox_inches='tight')
+            plt.close()
+            logging.info('Saved the SHAP importance plot to %s', bar_plot_path)
 
-        #     # Plot the % of SVs (TPs and FPs) overlapping with the genomic
-        #     # context regions (simpleRepeat, segdup, fragile_site, phastCons >
-        #     # 0.5)
-        #     # print("Number of TPs: ", tp_data.shape[0])
-        #     # print("Number of FPs: ", fp_data.shape[0])
-        #     # logging.info('Plotting the percentage of SVs (TPs and FPs) overlapping with the genomic context regions.')
-        #     # for feature in ['simpleRepeat', 'segdup', 'fragile_site', 'phastCons']:
-        #     #     if feature == 'phastCons':
-        #     #         tp_data_feature = tp_data[tp_data[feature] > 0.5]
-        #     #         fp_data_feature = fp_data[fp_data[feature] > 0.5]
-        #     #     else:
-        #     #         tp_data_feature = tp_data[tp_data[feature] == 1]
-        #     #         fp_data_feature = fp_data[fp_data[feature] == 1]
-        #     #     tp_pcnt = tp_data_feature.shape[0] / tp_data.shape[0] * 100
-        #     #     fp_pcnt = fp_data_feature.shape[0] / fp_data.shape[0] * 100
-        #     #     logging.info('Feature %s: TP = %.2f%%, FP = %.2f%%', feature, tp_pcnt, fp_pcnt)
-        #     #     plt.figure()
-        #     #     plt.bar(['TP', 'FP'], [tp_pcnt, fp_pcnt], color=['#0072B2', '#D55E00'])  # Blue, Vermillion (colorblind-friendly)
-        #     #     plt.xlabel('SV Type')
-        #     #     plt.ylabel('Percentage of SVs')
-        #     #     plt.title('Percentage of SVs Overlapping with %s' % feature)
-        #     #     plt.ylim([0, 100])
-        #     #     # Save the plot to the output directory.
-        #     #     feature_plot_path = os.path.join(output_directory, model_name_fp + '_%s.png' % feature)
-        #     #     plt.savefig(feature_plot_path, bbox_inches='tight')
-        #     #     plt.close()
-        #     #     logging.info('Saved the %s plot to %s', feature, feature_plot_path)
-
-        #     # # Exit early to verify the feature importances.
-        #     # sys.exit(0)
-
-        #     # Convert bool columns to int for SHAP analysis.
-        #     bool_cols = X_train.select_dtypes(include=['bool']).columns
-        #     X_train[bool_cols] = X_train[bool_cols].astype(int)
-
-        #     # Analyze the feature importances using SHAP values.
-        #     import shap
-        #     # explainer = shap.Explainer(model, X_train)
-        #     # shap_values = explainer(X_train)
-
-        #     # SHAP doesn't support XGBoost with categorical features directly,
-        #     # so we need to use their suggested workaround.
-        #     explainer = shap.TreeExplainer(model, feature_perturbation="tree_path_dependent")
-        #     shap_values = explainer.shap_values(X_train)
-
-        #     # Plot the SHAP values.
-        #     plt.figure(figsize=(10, 6))
-        #     shap.summary_plot(shap_values, X_train, feature_names=feature_names, show=False)
-        #     # Save the SHAP summary plot to the output directory.
-        #     shap_plot_path = os.path.join(output_directory, model_name_fp + '_shap_summary_plot.png')
-        #     plt.savefig(shap_plot_path, bbox_inches='tight')
-        #     plt.close()
-        #     logging.info('Saved the SHAP summary plot to %s', shap_plot_path)
-
-        #     # -----------------------------------------------
-        #     # SV Length vs SHAP values
-        #     # -----------------------------------------------
-
-        #     # # Plot 1: SHAP values vs SV length.
-        #     # plt.figure(figsize=(10, 6))
-        #     # sns.scatterplot(data=X_train, x='abs_SVLEN', y='shap_SVLEN', hue='true_label', alpha=0.6)
-        #     # plt.xscale('log')
-        #     # plt.xlabel("SV Length (bp, log scale)")
-        #     # plt.ylabel("SHAP value for SV Length")
-        #     # plt.title("SHAP value vs. SV length")
-        #     # plt.axhline(0, color='gray', linestyle='--')
-        #     # plt.legend(title="True Label")
-        #     # plt.tight_layout()
-        #     # shap_svlen_plot_path = os.path.join(output_directory, model_name_fp + '_shap_svlen.png')
-        #     # plt.savefig(shap_svlen_plot_path, bbox_inches='tight')
-        #     # plt.close()
-        #     # logging.info('Saved the SHAP value vs. SV length plot to %s', shap_svlen_plot_path)
-
-        #     # # Plot 2: Predicted probability vs SV length.
-        #     # X_train['y_prob'] = model.predict_proba(X_train)[:, 1]
-        #     # plt.figure(figsize=(10, 6))
-        #     # sns.scatterplot(data=X_train, x='abs_SVLEN', y='y_prob', hue='true_label', alpha=0.6)
-        #     # plt.xscale('log')
-        #     # plt.xlabel("SV Length (bp, log scale)")
-        #     # plt.ylabel("Predicted Probability of Being True Positive")
-        #     # plt.title("Predicted Probability vs. SV length")
-        #     # plt.axhline(0.5, color='gray', linestyle='--')
-        #     # plt.legend(title="True Label")
-        #     # plt.tight_layout()
-        #     # prob_svlen_plot_path = os.path.join(output_directory, model_name_fp + '_prob_svlen.png')
-        #     # plt.savefig(prob_svlen_plot_path, bbox_inches='tight')
-        #     # plt.close()
-        #     # logging.info('Saved the predicted probability vs. SV length plot to %s', prob_svlen_plot_path)
-
-        #     # plt.title('Feature Importances')
-
-        #     # [TEST] Exit after this step to verify the feature importances.
-        #     # sys.exit(0)
-
-        # # For SVC, get the coefficients.
-        # # if model_name == "SVC":
-        # #     # Get the coefficients.
-        # #     coefficients = model.coef_[0]
-
-        # #     # Sort the coefficients in descending order.
-        # #     indices = np.argsort(coefficients)[::-1]
-
-        # #     # Print the feature ranking.
-        # #     logging.info('Feature ranking:')
-        # #     for f in range(X_train.shape[1]):
-        # #         logging.info('%d. Feature %s (%f)', f + 1, feature_names[indices[f]], coefficients[indices[f]])
-
-        # #     # Plot the coefficients.
-        # #     plt.figure()
-        # #     plt.title('Feature Coefficients')
-        # #     plt.bar(range(X_train.shape[1]), coefficients[indices], align='center')
-        # #     plt.xticks(range(X_train.shape[1]), indices)
-        # #     plt.xlim([-1, X_train.shape[1]])
-        # #     # Save the plot to the output directory.
-        # #     coeff_plot_path = os.path.join(output_directory, model_name + '_feature_coefficients.png')
-        # #     plt.savefig(coeff_plot_path)
-        # #     plt.close()
-        # #     logging.info('Saved the feature coefficients plot to %s', coeff_plot_path)
-
-        # # For logistic regression, get the coefficients.
-        # if model_name == "Logistic Regression":
-        #     # Get the coefficients.
-        #     coefficients = model.coef_[0]
-
-        #     # Sort the coefficients in descending order.
-        #     indices = np.argsort(coefficients)[::-1]
-
-        #     # Print the feature ranking.
-        #     logging.info('Feature ranking:')
-        #     for f in range(X_train.shape[1]):
-        #         logging.info('%d. Feature %s (%f)', f + 1, feature_names[indices[f]], coefficients[indices[f]])
-
-        #     # Plot the coefficients.
-        #     plt.figure()
-        #     plt.title('Feature Coefficients')
-        #     plt.bar(range(X_train.shape[1]), coefficients[indices], align='center')
-        #     plt.xticks(range(X_train.shape[1]), indices)
-        #     plt.xlim([-1, X_train.shape[1]])
-        #     # Save the plot to the output directory.
-        #     coeff_plot_path = os.path.join(output_directory, model_name_fp + '_feature_coefficients.png')
-        #     plt.savefig(coeff_plot_path)
-        #     plt.close()
-        #     logging.info('Saved the feature coefficients plot to %s', coeff_plot_path)
-
-        # # Get the precision-recall curve f
-        # # precision, recall, thresholds = precision_recall_curve(labels, y_prob)
-        # # pr_auc = auc(recall, precision)
-
-        # # Plot the precision-recall curve.
-        # # plt.figure()
-        # # plt.plot(recall, precision, color='blue', lw=2, label='Precision-Recall curve (area = %0.2f)' % pr_auc)
-        # # plt.xlabel('Recall')
-        # # plt.ylabel('Precision')
-        # # plt.title('Precision-Recall Curve')
-        # # plt.legend(loc='lower left')
-        # # # Save the plot to the output directory.
-        # # pr_plot_path = os.path.join(output_directory, model_name + '_pr_curve.png')
-        # # plt.savefig(pr_plot_path)
-        # # plt.close()
-        # # logging.info('Saved the Precision-Recall curve to %s', pr_plot_path)
-
-        # # # Get the confusion matrix.
-        # # cm = confusion_matrix(labels, y_pred)
-        # # logging.info('Confusion matrix:\n%s', cm)
-
-        # # # Plot the confusion matrix using seaborn.
-        # # plt.figure()
-        # # sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
-        # # plt.xlabel('Predicted')
-        # # plt.ylabel('True')
-        # # plt.title('Confusion Matrix')
-        # # # Save the plot to the output directory.
-        # # cm_plot_path = os.path.join(output_directory, model_name + '_confusion_matrix.png')
-        # # plt.savefig(cm_plot_path)
-        # # plt.close()
-        # # logging.info('Saved the confusion matrix to %s', cm_plot_path)
-
-        # # # Print the classification report.
-        # # logging.info('Classification report:\n%s', classification_report(labels, y_pred))
-
-        # # # Save the report to a file.
-        # # report_path = os.path.join(output_directory, model_name + '_classification_report.txt')
-        # # with open(report_path, 'w') as f:
-        # #     f.write(classification_report(labels, y_pred))
-
-        # # logging.info('Saved the classification report to %s', report_path)
-
-        # # Save the model.
-        # model_path = os.path.join(output_directory, model_name_fp + '_caller_model.pkl')
-        # logging.info('Saving the model to %s', model_path)
-        # joblib.dump(model, model_path)
-        # logging.info('Saved the model to %s', model_path)
-
-        # # Run cross-validation by splitting the data into 5 folds and training
-        # # the model on each fold.
-        # # from sklearn.model_selection import cross_val_score
-        # # logging.info('Running cross-validation.')
-        # # scores = cross_val_score(model, features, labels, cv=5, scoring='f1')
-        # # logging.info('Cross-validation scores: %s', scores)
-        # # logging.info('Mean cross-validation score: %f', scores.mean())
-
-    # # Exit early if not running per-chromosome cross-validation analysis.
-    # return
-
-    # # Run a cross-validation analysis splitting the data by chromosome.
-    # logging.info('Running cross-validation analysis splitting the data by chromosome.')
-    # # chromosomes = features['chrom'].unique()
-
-    # # Specify the chromosomes to not include non-standard chromosomes.
-    # # chromosomes = ['chr1', 'chr2', 'chr3', 'chr4', 'chr5', 'chr6', 'chr7', 'chr8', 'chr9', 'chr10',
-    # #               'chr11', 'chr12', 'chr13', 'chr14', 'chr15', 'chr16', 'chr17', 'chr18', 'chr19', 'chr20', 'chr21', 'chr22', 'chrX', 'chrY']
-    
-    # # 4 August 2025: Remove chrY from the analysis. More than half is missing in
-    # # GRCh38 and leads to high false positive rates.
-    # chromosomes = ['chr1', 'chr2', 'chr3', 'chr4', 'chr5', 'chr6', 'chr7', 'chr8', 'chr9', 'chr10',
-    #               'chr11', 'chr12', 'chr13', 'chr14', 'chr15', 'chr16', 'chr17', 'chr18', 'chr19', 'chr20', 'chr21', 'chr22', 'chrX']
-
-    # logging.info('Chromosomes: %s', chromosomes)
-    # f1_scores = {}
-    # precision_scores = {}
-    # recall_scores = {}
-    # cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-    # pipelines = {
-    #     "Logistic Regression": Pipeline([
-    #         ('scaler', StandardScaler()),
-    #         ('classifier', LogisticRegression())
-    #     ]),
-    #     "Random_Forest": Pipeline([
-    #         ('classifier', RandomForestClassifier(n_estimators=100, random_state=42))
-    #     ]),
-    #     "XGBoost": Pipeline([
-    #         ('classifier', XGBClassifier(eval_metric='logloss', enable_categorical=True))
-    #     ]),
-    #     "SVC": Pipeline([
-    #         ('scaler', StandardScaler()),
-    #         ('classifier', SVC(kernel='linear', class_weight='balanced', probability=True))
-    #     ])
-    # }
-
-    # # =================================================================
-    # # Hyperparameter grids
-    # # =================================================================
-    # param_grids = {
-    #     "Logistic Regression": {
-    #         'classifier__C': [0.01, 0.1, 1, 10, 100],
-    #         'classifier__penalty': ['l1', 'l2'],
-    #         'classifier__solver': ['liblinear']
-    #     },
-    #     "Random_Forest": {
-    #         'classifier__n_estimators': [50, 100, 200],
-    #         'classifier__max_depth': [None, 10, 20],
-    #         'classifier__min_samples_split': [2, 5, 10]
-    #     },
-    #     "XGBoost": {
-    #         'classifier__n_estimators': [50, 100, 200],
-    #         'classifier__max_depth': [3, 6, 9],
-    #         'classifier__learning_rate': [0.1, 0.2, 0.3]
-    #     },
-    #     "SVC": {
-    #         'classifier__C': [0.1, 1.0, 10.0],
-    #         'classifier__kernel': ['linear', 'rbf'],
-    #         'classifier__gamma': ['scale', 'auto']
-    #     }
-    # }
-
-    # for name in pipelines.keys():
-    #     logging.info(f"\n=============================")
-    #     logging.info(f"Training pipeline: {name}")
-    #     logging.info(f"==============================\n")
-    #     pipe = pipelines[name]
-    #     grid = param_grids[name]
-    #     grid_search = GridSearchCV(pipe, grid, cv=cv, scoring='f1', n_jobs=-1)
-    #     grid_search.fit(features, labels)
-    #     logging.info(f"Best parameters for {name}: {grid_search.best_params_}")
-    #     # # Skip SVC
-    #     # if model_name == "SVC":
-    #     #     logging.info('Skipping SVC model for cross-validation analysis.')
-    #     #     continue
-
-    #     # # Skip all but XGBoost
-    #     # if model_name != "XGBoost":
-    #     #     logging.info('Skipping %s model for cross-validation analysis.', model_name)
-    #     #     continue
-
-    #     # Dictionary with number of SVs in the training set for each chromosome.
-    #     sv_counts = {chrom: features[chrom_col == chrom].shape[0] for chrom in chromosomes}
-    #     logging.info('Number of SVs in the training set for each chromosome: %s', sv_counts)
-
-    #     for chrom in chromosomes:
-    #         logging.info('Training the %s model on chromosome %s.', model_name, chrom)
-    #         # Split the data into training and testing sets by chromosome.
-    #         X_train_chrom = features[chrom_col != chrom].copy()
-    #         y_train_chrom = labels[chrom_col != chrom].copy()
-    #         X_test_chrom = features[chrom_col == chrom].copy()
-    #         y_test_chrom = labels[chrom_col == chrom].copy()
-
-    #         # Drop the chromosome column from the features.
-    #         # X_train_chrom.drop(columns=['chrom'], inplace=True)
-    #         # X_test_chrom.drop(columns=['chrom'], inplace=True)
-
-    #         logging.info('Training set size: %d, Testing set size: %d',
-    #                      X_train_chrom.shape[0], X_test_chrom.shape[0])
-    #         # Train the model.
-    #         model.fit(X_train_chrom, y_train_chrom)
-    #         # Get the predicted probabilities for the testing set.
-    #         y_test_chrom_prob = model.predict_proba(X_test_chrom)[:, 1]
-    #         # Compute the ROC curve and ROC area for the testing set.
-    #         fpr_chrom, tpr_chrom, _ = roc_curve(y_test_chrom, y_test_chrom_prob)
-    #         roc_auc_chrom = auc(fpr_chrom, tpr_chrom)
-    #         logging.info('ROC AUC score for the %s model on chromosome %s: %f', model_name, chrom, roc_auc_chrom)
-
-    #         # Compute the F1 score for the testing set.
-    #         from sklearn.metrics import f1_score
-    #         y_test_chrom_pred = (y_test_chrom_prob >= 0.5).astype(int)  # Use a threshold of 0.5 for classification.
-    #         f1 = f1_score(y_test_chrom, y_test_chrom_pred)
-    #         f1_scores[(model_name, chrom)] = f1
-    #         logging.info('F1 score for the %s model on chromosome %s: %f', model_name, chrom, f1)
-
-    #         # Compute precision and recall for the testing set.
-    #         from sklearn.metrics import precision_score, recall_score
-    #         precision = precision_score(y_test_chrom, y_test_chrom_pred)
-    #         recall = recall_score(y_test_chrom, y_test_chrom_pred)
-    #         precision_scores[(model_name, chrom)] = precision
-    #         recall_scores[(model_name, chrom)] = recall
-    #         logging.info('Precision for the %s model on chromosome %s: %f', model_name, chrom, precision)
-    #         logging.info('Recall for the %s model on chromosome %s: %f', model_name, chrom, recall)
-
-    #         # Compute the F1 score for the testing set.
-    #         # from sklearn.metrics import f1_score
-    #         # y_test_chrom_pred = (y_test_chrom_prob >= optimal_threshold).astype(int)
-    #         # f1 = f1_score(y_test_chrom, y_test_chrom_pred)
-    #         # # f1_scores.append(f1)
-    #         # f1_scores[(model_name, chrom)] = f1
-    #         # logging.info('F1 score for the %s model on chromosome %s: %f', model_name, chrom, f1)
-            
-    # logging.info('Cross-validation analysis completed. F1 scores: %s', f1_scores)
-
-    # # Plot the F1 scores for each model and chromosome (one plot per model).
-    # logging.info('Plotting the scores for each model and chromosome.')
-    # metrics = ['F1 Score', 'Precision', 'Recall']
-    # for model_name in models.keys():
-    #     # Skip if not XGBoost
-    #     if model_name != "XGBoost":
-    #         logging.info('Skipping %s model for plotting scores by chromosome.', model_name)
-    #         continue
-
-    #     # Save a plot with F1, Precision, and Recall scores for chrY
-    #     if 'chrY' in chromosomes:
-    #         logging.info('Plotting scores for %s model on chrY.', model_name)
-    #         # Create a bar plot for the F1 scores by chromosome.
-    #         chry_f1 = f1_scores.get((model_name, 'chrY'), 0)
-    #         chry_precision = precision_scores.get((model_name, 'chrY'), 0)
-    #         chry_recall = recall_scores.get((model_name, 'chrY'), 0)
-
-    #         # plt.figure(figsize=(10, 6))
-
-    #         # Make it way smaller for better visibility.
-    #         plt.figure(figsize=(6, 4))
-
-    #         # Plot F1, Precision, and Recall scores for chrY.
-    #         sns.barplot(x=['F1 Score', 'Precision', 'Recall'], y=[chry_f1, chry_precision, chry_recall], color='black')
-
-    #         # plt.xlabel('Metric')
-    #         plt.ylabel('Score')
-    #         plt.title('%s Scores for %s Model on chrY' % (model_name, model_name))
-    #         plt.xticks(rotation=45)
-    #         plt.legend()
-    #         plt.tight_layout()
-    #         # Save the plot to the output directory.
-    #         score_plot_path = os.path.join(output_directory, model_name + '_scores_chrY.png')
-    #         plt.savefig(score_plot_path)
-    #         plt.close()
-    #         logging.info('Saved the scores plot for chrY to %s', score_plot_path)
-
-
-    #     for metric, scores in zip(metrics, [f1_scores, precision_scores, recall_scores]):
-    #         logging.info('Plotting %s for %s model by chromosome.', metric, model_name)
-    #         # Create a bar plot for the F1 scores by chromosome.
-    #         # model_f1_scores = {chrom: f1_scores[(model_name, chrom)] for chrom
-    #         # in chromosomes if (model_name, chrom) in f1_scores}
-    #         model_scores = {chrom: scores[(model_name, chrom)] for chrom in chromosomes if (model_name, chrom) in scores}
-
-    #         plt.figure(figsize=(10, 6))
-    #         # Smaller figure size for better visibility.
-    #         # plt.figure(figsize=(8, 5))
-    #         ax = sns.barplot(x=list(model_scores.keys()), y=list(model_scores.values()), color='black')
-
-    #         # Annotate each bar with the number of SVs in the training set for that
-    #         # chromosome.
-    #         # Put the number of SVs above each bar.
-    #         # for i, (chrom, score) in enumerate(model_scores.items()):
-    #         #     num_sv = sv_counts[chrom]
-    #         #     ax.text(i, score + 0.01, f'{num_sv}', ha='center', va='bottom', fontsize=8)
-
-    #         plt.xlabel('Chromosome')
-    #         plt.ylabel(metric)
-    #         plt.title('%s for %s Model by Chromosome' % (metric, model_name))
-    #         plt.xticks(rotation=45)
-    #         plt.tight_layout()
-    #         # Save the plot to the output directory.
-    #         score_plot_path = os.path.join(output_directory, model_name + '_%s_by_chromosome.png' % metric.lower().replace(' ', '_'))
-    #         plt.savefig(score_plot_path)
-    #         plt.close()
-    #         logging.info('Saved the %s plot to %s', metric, score_plot_path)
 
 if __name__ == '__main__':
     # Parse the command line arguments.
