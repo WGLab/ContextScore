@@ -295,21 +295,21 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
         X_train, y_train = features, labels
         X_test, y_test = features, labels
 
-    # If not 80/20 split, use XGBoost only (highest performing model) to save time.
-    # if split_80_20:
-    #     pipelines = {
-    #         "Logistic_Regression": Pipeline([('classifier', LogisticRegression(max_iter=1000, random_state=42))]),
-    #         "Random_Forest": Pipeline([('classifier', RandomForestClassifier(n_estimators=100, random_state=42))]),
-    #         "XGBoost": Pipeline([('classifier', XGBClassifier(n_estimators=100, eval_metric='logloss', random_state=42, enable_categorical=False))])
-    #     }
-    # else:
-    #     pipelines = {
-    #         "XGBoost": Pipeline([('classifier', XGBClassifier(n_estimators=100, eval_metric='logloss', random_state=42, enable_categorical=False))])
-    #     }
-
-    pipelines = {
-        "XGBoost": Pipeline([('classifier', XGBClassifier(n_estimators=100, eval_metric='logloss', random_state=42, enable_categorical=False))])
-    }
+    # If not 80/20 split, use XGBoost and Random Forest only (highest performing models) to save time.
+    if split_80_20:
+        pipelines = {
+            "Logistic_Regression": Pipeline([('classifier', LogisticRegression(max_iter=1000, random_state=42))]),
+            "Random_Forest": Pipeline([('classifier', RandomForestClassifier(n_estimators=100, random_state=42))]),
+            "XGBoost": Pipeline([('classifier', XGBClassifier(n_estimators=100, eval_metric='logloss', random_state=42, enable_categorical=False))])
+        }
+    else:
+        pipelines = {
+            "Random_Forest": Pipeline([('classifier', RandomForestClassifier(n_estimators=100, random_state=42))]),
+        }
+        # pipelines = {
+        #     "Random_Forest": Pipeline([('classifier', RandomForestClassifier(n_estimators=100, random_state=42))]),
+        #     "XGBoost": Pipeline([('classifier', XGBClassifier(n_estimators=100, eval_metric='logloss', random_state=42, enable_categorical=False))])
+        # }
 
     param_grids = {
         "Logistic_Regression": {
@@ -423,48 +423,143 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
 
         # Run SHAP if full analysis and no leave-outs (SHAP is slow)
         if not split_80_20 and no_leave_out:
-            # SHAP doesn't support XGBoost with categorical features directly,
-            # so we need to use their suggested workaround.
+            logging.info('Running feature importance analysis for %s model.', model_name)
             classifier = best_model.named_steps['classifier']
 
-            # Prepare numeric data for SHAP
-            X_train_numeric = X_train.copy()
-            for col in X_train_numeric.columns:
-                if X_train_numeric[col].dtype == 'object':
-                    X_train_numeric[col] = pd.to_numeric(X_train_numeric[col], errors='coerce')
+            # For Random Forest, use both native importance and SHAP (with aggressive sampling)
+            if model_name == 'Random_Forest':
+                try:
+                    # 1. Native Gini importance (instant)
+                    feature_importances = classifier.feature_importances_
+                    feature_names = X_train.columns.tolist()
+                    
+                    importance_df = pd.DataFrame({
+                        'feature': feature_names,
+                        'importance': feature_importances
+                    }).sort_values('importance', ascending=True)
+                    
+                    plt.figure(figsize=(10, 8))
+                    plt.barh(importance_df['feature'], importance_df['importance'])
+                    plt.xlabel('Feature Importance (Gini)')
+                    plt.ylabel('Feature')
+                    plt.title('Random Forest Feature Importances (Gini)')
+                    plt.tight_layout()
+                    importance_plot_path = os.path.join(output_directory, model_name_fp + '_feature_importance_plot.png')
+                    plt.savefig(importance_plot_path, dpi=300, bbox_inches='tight')
+                    plt.close()
+                    logging.info('Saved Random Forest Gini importance plot to %s', importance_plot_path)
+                    
+                    importance_csv_path = os.path.join(output_directory, model_name_fp + '_feature_importances.csv')
+                    importance_df.sort_values('importance', ascending=False).to_csv(importance_csv_path, index=False)
+                    logging.info('Saved feature importances to %s', importance_csv_path)
+                    
+                    # 2. SHAP analysis with aggressive sampling for efficiency
+                    logging.info('Computing SHAP values for Random Forest (with sampling)...')
+                    X_train_numeric = X_train.copy()
+                    for col in X_train_numeric.columns:
+                        if X_train_numeric[col].dtype == 'object':
+                            X_train_numeric[col] = pd.to_numeric(X_train_numeric[col], errors='coerce')
+                    X_train_numeric = X_train_numeric.fillna(0).astype('float64')
+                    
+                    # Aggressive sampling for RF SHAP: reduce from 148k to ~300 samples
+                    explain_size = min(300, len(X_train_numeric))
+                    background_size = min(50, len(X_train_numeric) // 100)  # ~1% of data
+                    X_explain = shap.sample(X_train_numeric, explain_size, random_state=42)
+                    X_background = shap.sample(X_train_numeric, background_size, random_state=42)
+                    
+                    logging.info('SHAP RF: explain_size=%d, background_size=%d (from %d total)', 
+                                 explain_size, background_size, len(X_train_numeric))
+                    
+                    # Use tree_path_dependent which is faster and more memory-efficient
+                    explainer = shap.TreeExplainer(classifier, feature_perturbation='tree_path_dependent', 
+                                                    model_output='probability')
+                    shap_values = explainer.shap_values(X_explain, check_additivity=False)
+                    
+                    # Handle binary classification output (list of 2 arrays)
+                    if isinstance(shap_values, list):
+                        shap_values = shap_values[1]  # Use positive class
+                    
+                    # SHAP summary plot
+                    plt.figure(figsize=(10, 8))
+                    shap.summary_plot(shap_values, X_explain, show=False)
+                    shap_plot_path = os.path.join(output_directory, model_name_fp + '_shap_summary_plot.png')
+                    plt.savefig(shap_plot_path, dpi=300, bbox_inches='tight')
+                    plt.close()
+                    logging.info('Saved SHAP summary plot to %s', shap_plot_path)
+                    
+                    # SHAP bar plot (mean |SHAP|)
+                    plt.figure(figsize=(10, 8))
+                    shap.summary_plot(shap_values, X_explain, plot_type='bar', show=False)
+                    bar_plot_path = os.path.join(output_directory, model_name_fp + '_shap_importance_plot.png')
+                    plt.savefig(bar_plot_path, dpi=300, bbox_inches='tight')
+                    plt.close()
+                    logging.info('Saved SHAP importance plot to %s', bar_plot_path)
+                    
+                except Exception as exc:
+                    logging.warning('SHAP analysis skipped for %s: %s', model_name, exc)
+            
+            # For other models, use SHAP
+            else:
+                # Prepare numeric data for SHAP
+                X_train_numeric = X_train.copy()
+                for col in X_train_numeric.columns:
+                    if X_train_numeric[col].dtype == 'object':
+                        X_train_numeric[col] = pd.to_numeric(X_train_numeric[col], errors='coerce')
 
-            X_train_numeric = X_train_numeric.fillna(0).astype('float64')
+                X_train_numeric = X_train_numeric.fillna(0).astype('float64')
 
-            # Use a larger background sample to cover all tree leaves
-            sample_size = min(5000, len(X_train_numeric))  # Larger sample
-            X_background = shap.sample(X_train_numeric, sample_size, random_state=42)
+                # Bound SHAP workload to avoid OOM/core-dump on large full-model runs.
+                explain_size = min(5000, len(X_train_numeric))
+                background_size = min(300, len(X_train_numeric))
+                X_explain = shap.sample(X_train_numeric, explain_size, random_state=42)
+                X_background = shap.sample(X_train_numeric, background_size, random_state=42)
 
-            # Create explainer and calculate SHAP values
-            explainer = shap.TreeExplainer(classifier, X_background)
+                logging.info(
+                    'SHAP sampling: explain_size=%d, background_size=%d (from %d training rows)',
+                    len(X_explain), len(X_background), len(X_train_numeric)
+                )
 
-            # Calculate SHAP values
-            shap_values = explainer.shap_values(X_train_numeric)
+                try:
+                    if model_name == 'XGBoost':
+                        explainer = shap.TreeExplainer(classifier, feature_perturbation='tree_path_dependent')
+                        shap_values = explainer.shap_values(X_explain)
+                    elif model_name == 'Logistic_Regression':
+                        explainer = shap.LinearExplainer(classifier, X_background)
+                        shap_values = explainer.shap_values(X_explain)
+                    else:
+                        explainer = shap.Explainer(classifier, X_background)
+                        shap_values = explainer(X_explain)
 
-            # 1. Summary plot (existing)
-            plt.figure(figsize=(10, 8))
-            shap.summary_plot(shap_values, X_train_numeric, show=False)
-            shap_plot_path = os.path.join(output_directory, model_name_fp + '_shap_summary_plot.png')
-            plt.savefig(shap_plot_path, dpi=300, bbox_inches='tight')
-            plt.close()
-            logging.info('Saved the SHAP summary plot to %s', shap_plot_path)
+                    # Some SHAP explainers return one array per class. For binary
+                    # classification plots, use positive class values.
+                    if isinstance(shap_values, list) and len(shap_values) > 1:
+                        shap_values_to_plot = shap_values[1]
+                    else:
+                        shap_values_to_plot = shap_values
 
-            # 2. Bar plot showing mean absolute SHAP values (feature importance)
-            plt.figure(figsize=(10, 8))
-            shap.summary_plot(shap_values, X_train_numeric, plot_type="bar", show=False)
-            bar_plot_path = os.path.join(output_directory, model_name_fp + '_shap_importance_plot.png')
-            plt.savefig(bar_plot_path, dpi=300, bbox_inches='tight')
-            plt.close()
-            logging.info('Saved the SHAP importance plot to %s', bar_plot_path)
+                    # 1. Summary plot
+                    plt.figure(figsize=(10, 8))
+                    shap.summary_plot(shap_values_to_plot, X_explain, show=False)
+                    shap_plot_path = os.path.join(output_directory, model_name_fp + '_shap_summary_plot.png')
+                    plt.savefig(shap_plot_path, dpi=300, bbox_inches='tight')
+                    plt.close()
+                    logging.info('Saved the SHAP summary plot to %s', shap_plot_path)
 
-    # Save the scaler for use during prediction (always save, regardless of model selection)
-    scaler_path = os.path.join(output_directory, 'scaler_tp.pkl')
-    joblib.dump(scaler_tp, scaler_path)
-    logging.info('Saved the TP scaler to %s for predictions', scaler_path)
+                    # 2. Bar plot showing mean absolute SHAP values (feature importance)
+                    plt.figure(figsize=(10, 8))
+                    shap.summary_plot(shap_values_to_plot, X_explain, plot_type='bar', show=False)
+                    bar_plot_path = os.path.join(output_directory, model_name_fp + '_shap_importance_plot.png')
+                    plt.savefig(bar_plot_path, dpi=300, bbox_inches='tight')
+                    plt.close()
+                    logging.info('Saved the SHAP importance plot to %s', bar_plot_path)
+                except Exception as exc:
+                    logging.warning('SHAP analysis failed for %s: %s. Continuing without SHAP outputs.', model_name, exc)
+
+        # Save the scaler for use during prediction if training the full model (not 80-20 split)
+        if not split_80_20:
+            scaler_path = os.path.join(output_directory, 'scaler_tp.pkl')
+            joblib.dump(scaler_tp, scaler_path)
+            logging.info('Saved the TP scaler to %s for predictions', scaler_path)
 
 
 if __name__ == '__main__':

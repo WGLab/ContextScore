@@ -284,10 +284,7 @@ def run_bedtools_intersect(input_bed, table_bed, training_format=False):
                 dtype={'chrom': str, 'start': np.int32, 'end': np.int32, 'chr_anno': str, 'start_anno': np.int32, 'end_anno': np.int32, 'name': str}
             )
 
-        # Print the first few rows of the annotated BED file.
-        logging.info('Annotated BED file:\n%s', annotated_bed.head())
-
-        return annotated_bed        
+        return annotated_bed
 
     except subprocess.CalledProcessError as e:
         logging.error('Error annotating the BED file: %s', e)
@@ -314,7 +311,6 @@ def bed_to_annovar_input(bed_file):
     
     # Check if the BED file is empty.
     logging.info('Number of rows in the BED file: %d', df.shape[0])
-    logging.info('First 5 rows of the BED file:\n%s', df.head())
 
     # The ANNOVAR input format requires the following columns:
     # 1. Chromosome
@@ -338,7 +334,6 @@ def bed_to_annovar_input(bed_file):
     logging.info('Saving the ANNOVAR input file to %s', output_file)
     annovar_df.to_csv(output_file, sep='\t', index=False, header=False)
     logging.info('Number of rows in the ANNOVAR input file: %d', annovar_df.shape[0])
-    logging.info('First 5 rows of the ANNOVAR input file:\n%s', annovar_df.head())
     logging.info('Saved the ANNOVAR input file to %s', output_file)
 
     return output_file
@@ -769,14 +764,9 @@ def add_annotations(data, input_bed, annovar_path, db_path, anno_outdir, buildve
     logging.info('Computing repeat span density (total repeat coverage across SV)...')
     data['repeat_span_density'] = compute_repeat_density_span(data, simpleRepeat_df)  # across entire SV
     logging.info('Repeat span density calculated. Mean: %.3f, Max: %.3f', data['repeat_span_density'].mean(), data['repeat_span_density'].max())
-    
-    # Print the current columns in the data.
-    logging.info('Current columns in the data: %s', data.columns)
 
     # Drop the unnecessary/redundant columns.
     data.drop(columns=['Chr', 'Start', 'End', 'cytoBand', 'genomicSuperDups', 'Ref', 'Alt', 'segdup', 'simpleRepeat'], inplace=True)
-
-    logging.info('Dropped the unnecessary columns. Current columns: %s', data.columns)
 
     logging.info('Number of records after adding annotations: %d', data.shape[0])
 
