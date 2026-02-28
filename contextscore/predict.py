@@ -20,7 +20,7 @@ import seaborn as sns
 
 import matplotlib.pyplot as plt
 
-from extract_features import extract_features, add_interaction_terms
+from extract_features import extract_features
 
 def create_bed(input_vcf, output_bed):
     """Create a BED file from the input VCF file. Extract the following fields:
@@ -284,7 +284,7 @@ def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Dist
     shap_df['end'] = end_col.values
     shap_df['sv_type_str'] = sv_type_str_col.values
     # shap_df['sv_length'] = sv_length_col.values
-    shap_df['sv_length'] = feature_df['sv_length'].values  # Use the original sv_length from feature_df
+    # shap_df['sv_length'] = feature_df['sv_length'].values  # Use the original sv_length from feature_df
     shap_df['read_depth'] = read_depth_col.values
     shap_df['cluster_size'] = cluster_size_col.values
     shap_df['predicted_probability'] = y_pred[:, 1]

@@ -47,6 +47,7 @@ Example:
 import os
 import logging
 import joblib
+import numpy as np
 import pandas as pd
 
 from sklearn.model_selection import train_test_split
@@ -63,7 +64,7 @@ from sklearn.metrics import roc_curve, auc
 
 import matplotlib.pyplot as plt
 
-from extract_features import extract_features, add_interaction_terms, normalize_column
+from extract_features import extract_features
 
 # Set up the logger.
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -81,6 +82,57 @@ def balance_tp_fp_datasets(tp_data, fp_data):
         fp_data = fp_data.sample(tp_count, random_state=42)
     else:
         logging.info('The dataset is already balanced. True positives: %d, False positives: %d', tp_count, fp_count)
+
+    return tp_data, fp_data
+
+
+def impute_missing_values(tp_data, fp_data):
+    """Impute missing values using TP-referenced statistics to avoid excessive row drops."""
+    logging.info('Imputing NaN values using TP-referenced statistics...')
+
+    # Report NaNs by column before imputation.
+    tp_nan = tp_data.isna().sum()
+    fp_nan = fp_data.isna().sum()
+    tp_nan = tp_nan[tp_nan > 0].sort_values(ascending=False)
+    fp_nan = fp_nan[fp_nan > 0].sort_values(ascending=False)
+    if not tp_nan.empty:
+        logging.info('TP NaN counts by column before imputation: %s', tp_nan.to_dict())
+    if not fp_nan.empty:
+        logging.info('FP NaN counts by column before imputation: %s', fp_nan.to_dict())
+
+    bool_like_cols = {
+        'fragile_site', 'phastCons', 'telomere', 'centromere',
+        'simpleRepeat_left', 'simpleRepeat_right'
+    }
+
+    shared_cols = [col for col in tp_data.columns if col in fp_data.columns and col != 'label']
+    for col in shared_cols:
+        if not (tp_data[col].isna().any() or fp_data[col].isna().any()):
+            continue
+
+        if col in bool_like_cols:
+            tp_data[col] = tp_data[col].fillna(False)
+            fp_data[col] = fp_data[col].fillna(False)
+            continue
+
+        if pd.api.types.is_numeric_dtype(tp_data[col]):
+            fill_value = tp_data[col].median(skipna=True)
+            if pd.isna(fill_value):
+                fill_value = 0.0
+            tp_data[col] = tp_data[col].fillna(fill_value)
+            fp_data[col] = fp_data[col].fillna(fill_value)
+            continue
+
+        # Categorical/object fallback: use TP mode, else placeholder.
+        mode_values = tp_data[col].mode(dropna=True)
+        fill_value = mode_values.iloc[0] if not mode_values.empty else 'UNKNOWN'
+        tp_data[col] = tp_data[col].fillna(fill_value)
+        fp_data[col] = fp_data[col].fillna(fill_value)
+
+    # Report NaNs after imputation.
+    tp_remaining = int(tp_data.isna().sum().sum())
+    fp_remaining = int(fp_data.isna().sum().sum())
+    logging.info('NaN imputation complete. Remaining NaNs - TP: %d, FP: %d', tp_remaining, fp_remaining)
 
     return tp_data, fp_data
 
@@ -145,32 +197,37 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
     fp_count_after = fp_data.shape[0]
     logging.info('Removed %d tp duplicates and %d fp duplicates from the concatenated data. Remaining true positives: %d, remaining false positives: %d', tp_count_before - tp_count_after, fp_count_before - fp_count_after, tp_data.shape[0], fp_data.shape[0])
 
-    # Perform robust scaling on the read_depth and cluster_size columns using
-    # the RobustScaler from sklearn.
-    logging.info('Normalizing read_depth and cluster_size using Robust scaling.')
-    # First combine the data.
-    combined_data = pd.concat([tp_data, fp_data], ignore_index=True)
-    # Create a RobustScaler object.
+    # Perform robust scaling on the read_depth and cluster_size columns
+    # using the TP distribution as the reference point.
+    # RobustScaler formula: scaled = (x - median) / IQR
+    # By fitting on TP only and applying to both TP and FP, we ask:
+    # "How far from a typical true SV is this value?"
+    # This creates a meaningful signal: TP should cluster near 0, FP should be outliers.
+    logging.info('Normalizing read_depth and cluster_size using TP distribution as reference.')
     from sklearn.preprocessing import RobustScaler
-    scaler = RobustScaler()
-    # Fit the scaler to the data.
-    robust_scaled = scaler.fit_transform(combined_data[['read_depth', 'cluster_size']])
-    # Update the data with the scaled values.
-    combined_data[['read_depth', 'cluster_size']] = robust_scaled
-    # Split the data back into true positives and false positives.
-    tp_data = combined_data.iloc[:tp_data.shape[0]]
-    fp_data = combined_data.iloc[tp_data.shape[0]:]
-    logging.info('Normalization completed. True positives: %d, False positives: %d', tp_data.shape[0], fp_data.shape[0])
-
-    # Drop the genotype column from the data.
-    logging.info('Dropping the genotype column from the data.')
-    tp_data = tp_data.drop(columns=['genotype'], errors='ignore')
-    fp_data = fp_data.drop(columns=['genotype'], errors='ignore')
-
-    # Drop the cn_state column from the data.
-    logging.info('Dropping the cn_state column from the data.')
-    tp_data = tp_data.drop(columns=['cn_state'], errors='ignore')
-    fp_data = fp_data.drop(columns=['cn_state'], errors='ignore')
+    
+    scaler_tp = RobustScaler()
+    
+    # Fit scaler ONLY on TP data
+    if tp_data.shape[0] > 0 and 'read_depth' in tp_data.columns and 'cluster_size' in tp_data.columns:
+        scaler_tp.fit(tp_data[['read_depth', 'cluster_size']])
+        logging.info('Fitted TP scaler on %d TP samples', tp_data.shape[0])
+        logging.info('TP read_depth - median: %.2f, IQR: %.2f', 
+                     scaler_tp.center_[0], 
+                     scaler_tp.scale_[0])
+        
+        # Apply TP scaler to BOTH TP and FP data
+        tp_data[['read_depth', 'cluster_size']] = scaler_tp.transform(tp_data[['read_depth', 'cluster_size']])
+        logging.info('Applied TP scaler to TP data. Stats: read_depth mean=%.2f, std=%.2f', 
+                     tp_data['read_depth'].mean(), tp_data['read_depth'].std())
+    
+    if fp_data.shape[0] > 0 and 'read_depth' in fp_data.columns and 'cluster_size' in fp_data.columns:
+        # Use the SAME TP scaler on FP data
+        fp_data[['read_depth', 'cluster_size']] = scaler_tp.transform(fp_data[['read_depth', 'cluster_size']])
+        logging.info('Applied TP scaler to FP data. Stats: read_depth mean=%.2f, std=%.2f', 
+                     fp_data['read_depth'].mean(), fp_data['read_depth'].std())
+    
+    logging.info('Normalization completed. TP and FP are now scaled relative to TP distribution.')
 
     # Drop SV length features since they are highly correlated with the SV type feature and may lead to overfitting.
     # logging.info('Dropping SV length feature from the data.')
@@ -185,12 +242,15 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
     logging.info('Number of true labels: %d', tp_data.shape[0])
     logging.info('Number of false labels: %d', fp_data.shape[0])
 
-    # Drop NaN values from the data.
-    logging.info('Dropping NaN values from the data.')
+    # Impute NaN values from the data using TP-referenced statistics.
+    tp_data, fp_data = impute_missing_values(tp_data, fp_data)
+
+    # Safety drop for any residual NaNs that could break downstream training.
+    logging.info('Dropping any residual NaN rows after imputation.')
     tp_data = tp_data.dropna()
     fp_data = fp_data.dropna()
-    logging.info('Number of true labels after dropping NaN values: %d', tp_data.shape[0])
-    logging.info('Number of false labels after dropping NaN values: %d', fp_data.shape[0])
+    logging.info('Number of true labels after impute+dropna: %d', tp_data.shape[0])
+    logging.info('Number of false labels after impute+dropna: %d', fp_data.shape[0])
 
     # Balance the dataset by undersampling the true positives.
     # logging.info('Balancing the dataset by undersampling the true positives (count = %d) to match the false positives (count = %d)', tp_data.shape[0], fp_data.shape[0])
@@ -236,16 +296,20 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
         X_test, y_test = features, labels
 
     # If not 80/20 split, use XGBoost only (highest performing model) to save time.
-    if split_80_20:
-        pipelines = {
-            "Logistic_Regression": Pipeline([('classifier', LogisticRegression(max_iter=1000, random_state=42))]),
-            "Random_Forest": Pipeline([('classifier', RandomForestClassifier(n_estimators=100, random_state=42))]),
-            "XGBoost": Pipeline([('classifier', XGBClassifier(n_estimators=100, eval_metric='logloss', random_state=42, enable_categorical=False))])
-        }
-    else:
-        pipelines = {
-            "XGBoost": Pipeline([('classifier', XGBClassifier(n_estimators=100, eval_metric='logloss', random_state=42, enable_categorical=False))])
-        }
+    # if split_80_20:
+    #     pipelines = {
+    #         "Logistic_Regression": Pipeline([('classifier', LogisticRegression(max_iter=1000, random_state=42))]),
+    #         "Random_Forest": Pipeline([('classifier', RandomForestClassifier(n_estimators=100, random_state=42))]),
+    #         "XGBoost": Pipeline([('classifier', XGBClassifier(n_estimators=100, eval_metric='logloss', random_state=42, enable_categorical=False))])
+    #     }
+    # else:
+    #     pipelines = {
+    #         "XGBoost": Pipeline([('classifier', XGBClassifier(n_estimators=100, eval_metric='logloss', random_state=42, enable_categorical=False))])
+    #     }
+
+    pipelines = {
+        "XGBoost": Pipeline([('classifier', XGBClassifier(n_estimators=100, eval_metric='logloss', random_state=42, enable_categorical=False))])
+    }
 
     param_grids = {
         "Logistic_Regression": {
@@ -348,7 +412,12 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
             model_path = os.path.join(output_directory, model_name_fp + '_model.pkl')
             joblib.dump(best_model, model_path)
             logging.info('Saved the %s model to %s', model_name, model_path)
-
+            
+            # Save the TP scaler for use during prediction
+            # (Both TP and FP are scaled relative to TP distribution)
+            scaler_path = os.path.join(output_directory, 'scaler_tp.pkl')
+            joblib.dump(scaler_tp, scaler_path)
+            logging.info('Saved the TP scaler to %s (for prediction on both TP and FP)', scaler_path)
 
         logging.info('Completed training and evaluation for %s model.', model_name)
 
@@ -391,6 +460,11 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
             plt.savefig(bar_plot_path, dpi=300, bbox_inches='tight')
             plt.close()
             logging.info('Saved the SHAP importance plot to %s', bar_plot_path)
+
+    # Save the scaler for use during prediction (always save, regardless of model selection)
+    scaler_path = os.path.join(output_directory, 'scaler_tp.pkl')
+    joblib.dump(scaler_tp, scaler_path)
+    logging.info('Saved the TP scaler to %s for predictions', scaler_path)
 
 
 if __name__ == '__main__':

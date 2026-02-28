@@ -14,16 +14,16 @@ Output:
 import os
 import sys
 import logging
+import heapq
 import numpy as np
 import pandas as pd
 import subprocess
-import joblib
 from io import StringIO
 
 
 def read_cytoband_file(cytoband_file):
     """Get the centromere and telomere regions for each chromosome."""
-    cytobands = pd.read_csv(cytoband_file, sep='\t', header=None, names=["chrom", "start", "end", "name", "gieStain"])
+    cytobands = pd.read_csv(cytoband_file, sep='\t', header=0, names=["chrom", "start", "end", "name", "gieStain"], dtype={"chrom": str, "start": int, "end": int, "name": str, "gieStain": str})
     chrom_dict = {}
     for chrom in cytobands['chrom'].unique():
         
@@ -31,194 +31,53 @@ def read_cytoband_file(cytoband_file):
         if chrom == 'chrM':
             continue
 
-        chrom_df = cytobands[cytobands['chrom'] == chrom]
-        # First and last bands are the telomeres.
-        # First telomere:
+        chrom_df = cytobands[cytobands['chrom'] == chrom].sort_values('start')
+        # Store chromosome boundaries and terminal bands.
         chrom_dict[chrom] = {
-            'telomerep': chrom_df.iloc[0]['name'],
-            'telomereq': chrom_df.iloc[-1]['name']
+            'chrom_start': int(chrom_df['start'].min()),
+            'chrom_end': int(chrom_df['end'].max()),
+            'telomerep_start': int(chrom_df.iloc[0]['start']),
+            'telomerep_end': int(chrom_df.iloc[0]['end']),
+            'telomereq_start': int(chrom_df.iloc[-1]['start']),
+            'telomereq_end': int(chrom_df.iloc[-1]['end'])
         }
 
-        # Identify the 2 centromeres for p and q (contain "acen").
-        centromere_p = chrom_df[chrom_df['name'].str.contains('acen') & chrom_df['name'].str.contains('p')]
-        centromere_q = chrom_df[chrom_df['name'].str.contains('acen') & chrom_df['name'].str.contains('q')]
+        # Identify centromeres from cytobands with gieStain == "acen".
+        acen_df = chrom_df[chrom_df['gieStain'] == 'acen']
+        centromere_p = acen_df[acen_df['name'].str.startswith('p', na=False)]
+        centromere_q = acen_df[acen_df['name'].str.startswith('q', na=False)]
         if not centromere_p.empty:
-            chrom_dict[chrom]['centromerep'] = centromere_p.iloc[0]['name']
+            chrom_dict[chrom]['centromerep_start'] = int(centromere_p.iloc[0]['start'])
+            chrom_dict[chrom]['centromerep_end'] = int(centromere_p.iloc[0]['end'])
         if not centromere_q.empty:
-            chrom_dict[chrom]['centromereq'] = centromere_q.iloc[0]['name']
+            chrom_dict[chrom]['centromereq_start'] = int(centromere_q.iloc[0]['start'])
+            chrom_dict[chrom]['centromereq_end'] = int(centromere_q.iloc[0]['end'])
 
-        # print("Chromosome:", chrom)
-        # print(chrom_dict[chrom])
+        # Combined centromere span (union of acen blocks) for distance calculation.
+        if not acen_df.empty:
+            chrom_dict[chrom]['centromere_start'] = int(acen_df['start'].min())
+            chrom_dict[chrom]['centromere_end'] = int(acen_df['end'].max())
 
     return chrom_dict
 
-import pandas as pd
-import numpy as np
 
-def normalize_column(df, column):
-    """Normalize a column using z-score normalization."""
-    mean = df[column].mean()
-    std = df[column].std()
-    df[column] = (df[column] - mean) / std
-    return df
-
-def add_interaction_terms(df):
-    """Add interaction terms to the dataframe."""
-
-    # Replace cluster_size with log transformed values to reduce the range.
-    # df['log_cs'] = np.log1p(np.abs(df['cluster_size']))
-
-    # df['log_rd'] = np.log1p(np.abs(df['read_depth']))
-    # Log-transform the sv_length column to reduce the range.
-    # df['log_svlen'] = np.log1p(np.abs(df['sv_length']))
-
-    # Log-transform the read_depth column to reduce the range.
-    # df['log_rd'] = np.log1p(np.abs(df['read_depth']))
-
-    # Log-transform the cluster_size column to reduce the range.
-    # df['log_cs'] = np.log1p(np.abs(df['cluster_size']))
-
-    # Add a feature for whether the SV is a CNV (DUP, DEL with non-zero HMM log
-    # likelihood).
-    # df['is_cnv_hmm'] = df['sv_type'].apply(lambda x: 1 if x in [0, 1] else 0)  # Assuming 0 is DEL and 1 is DUP
-    # df['is_cnv_hmm'] = df['is_cnv_hmm'] & (df['hmm_llh'] != 0)
-
-    # Cluster size * hmm_llh interaction term
-    df['cs_hmm'] = df['cluster_size'] * df['hmm_llh']
-
-    # Replace hmm_llh with likelihood
-    # df['hmm_llh'] = np.clip(np.exp(df['hmm_llh']), 1e-6, 0.999999)
-
-
-    # Boolean for whether the SV is an inversion (INV).
-    # df['is_inv'] = df['sv_type'].apply(lambda x: 1 if x == 2 else 0)  # Assuming 2 is INV
-
-    # SV length interaction terms
-    # df['svlenkb_cs'] = np.abs(df['sv_length']) / 1000 * df['cluster_size']
-    # df['svlenkb_rd'] = np.abs(df['sv_length']) / 1000 * df['read_depth']
-    # df['svlenkb_hmm'] = np.abs(df['sv_length']) / 1000 * df['hmm_llh']
-    # df['hmm_llh_scaled'] = df['hmm_llh'] / np.log1p(np.abs(df['sv_length']))
-
-    # df['hmm_llh_scaled'] = df['hmm_llh'] / (np.log1p(np.abs(df['sv_length'])))
-    # df['hmm_llh_per_kb'] = df['hmm_llh_scaled'] / (np.abs(df['sv_length']) / 1000 + 1e-6)
-
-    # Cluster size / read depth interaction terms
-    # df['cs_rd'] = df['cluster_size'] / (df['read_depth'] + 1e-6)
-
-    # Segdup * HMM llh interaction term
-    # df['segdup_hmm'] = df['segdup'] * df['hmm_llh']
-
-    # Segdup * cs/rd interaction term
-    # df['segdup_cs_rd'] = df['segdup'] * df['cs_rd']
-
-    # Simple repeat * cs/rd interaction terfm
-    # df['simple_repeat_cs_rd'] = df['simpleRepeat'] * df['cs_rd']
-
-    # Segdup * sv_length interaction term
-    # df['segdup_svlen'] = df['segdup'] * np.abs(df['sv_length'])
-
-    # Replace nans in segdup_hmm with 0
-    # df['segdup_hmm'] = df['segdup_hmm'].fillna(0)
-
-    # Segdup * cs
-    df['segdup_cs'] = df['segdup'] * df['cluster_size']
-
-    # Segdup * rd
-    df['segdup_rd'] = df['segdup'] * df['read_depth']
-
-    # Simple repeat * cs
-    df['simple_repeat_cs'] = df['simpleRepeat'] * df['cluster_size']
-
-    # Simple repeat * rd
-    df['simple_repeat_rd'] = df['simpleRepeat'] * df['read_depth']
-
-    # Fragile site * cs
-    df['fragile_site_cs'] = df['fragile_site'] * df['cluster_size']
-
-    # Fragile site * rd
-    df['fragile_site_rd'] = df['fragile_site'] * df['read_depth']
-
-    # Drop the segdup column
-    # df.drop(columns=['segdup'], inplace=True)
-
-    # # Drop the simple_repeat column
-    # df.drop(columns=['simpleRepeat'], inplace=True)
-
-    # # Drop the fragile_site column
-    # df.drop(columns=['fragile_site'], inplace=True)
-
-    # Drop cluster_size
-    # df.drop(columns=['cluster_size'], inplace=True)
-
-    # Drop the simple_repeat column
-    # df.drop(columns=['simpleRepeat'], inplace=True)
-
-    # Drop sv_type
-    # df.drop(columns=['sv_type'], inplace=True)
-    
-    # ---
-    # Cluster size per kb
-    # df['cs_per_kb'] = df['cluster_size'] / (np.abs(df['sv_length']) / 1000 + 1e-6)
-
-    # # Read depth per kb
-    # df['rd_per_kb'] = df['read_depth'] / (np.abs(df['sv_length']) / 1000 +
-    # 1e-6)
-    # ---
-
-    # Segmental duplication interaction terms
-    # CNVs are mostly in segmental duplications, so we can use the
-    # segmental duplication score to create interaction terms.
-    # df['is_dup_and']
-
-    # Cluster size * sv_length
-    # df['log_svlen_cs'] = df['log_svlen'] + df['log_cs']
-
-    # HMM log likelihood * sv_length
-    # df['log_svlen_hmm'] = df['log_svlen'] + df['hmm_llh']
-
-    # Remove log_cs
-    # df.drop(columns=['log_cs'], inplace=True)
-
-    # Read depth * sv_length
-    # df['log_svlen_rd'] = df['log_svlen'] + df['log_rd']
-
-    # Remove the log_svlen, log_rd, and log_cs columns, keeping the interaction
-    # terms only.
-    # df.drop(columns=['log_svlen', 'log_rd', 'log_cs'], inplace=True)
-
-    # df['rd_cs'] = df['read_depth'] * df['cluster_size']
-    # df['svlen_hmm'] = df['log_svlen'] * df['hmm_llh']
-    # df['cs_hmm'] = df['cluster_size'] * df['hmm_llh']
-    # df['rd_hmm'] = df['read_depth'] * df['hmm_llh']
-    # df['hmm_per_kb'] = df['hmm_llh'] / (np.abs(df['sv_length']) / 1000 + 1)
-
-    return df
-
-def add_overlap_count(df, chrom_col='chrom', start_col='start', end_col='end'):
-    """Add 'overlap_count' = number of other SVs on same chr that overlap each SV."""
-    out = pd.Series(0, index=df.index, dtype=np.int32)
-
-    for chrom, group in df.groupby(chrom_col, sort=False):
-        starts = group[start_col].to_numpy()
-        ends   = group[end_col].to_numpy()
-
-        # overlap if start_i < end_j  AND  start_j < end_i
-        overlap_matrix = (starts[:, None] < ends[None, :]) & \
-                         (starts[None, :] < ends[:, None])
-
-        # subtract 1 to drop the self-overlap on the diagonal
-        counts = overlap_matrix.sum(axis=1) - 1
-        out.loc[group.index] = counts.astype(np.int32)
-
-    df['overlap_count'] = out
-    return df
-
+def normalize_chrom_label(chrom):
+    """Normalize chromosome labels for robust joins/lookups (e.g., 1 vs chr1)."""
+    if pd.isna(chrom):
+        return None
+    chrom_str = str(chrom).strip()
+    if not chrom_str:
+        return None
+    chrom_str = chrom_str[3:] if chrom_str.lower().startswith('chr') else chrom_str
+    return chrom_str.upper()
 
 def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion='hg38'):
     """Extract the features from the BED file, columns are in the first row:
     chrom, start, end, sv_type, sv_length, genotype, read_depth, hmm_llh, aln_type, cluster_size
     """
     logging.info('Extracting features from the BED file %s', input_bed)
+
+
 
     # Get the number of columns in the BED file.
     with open(input_bed, 'r') as f:
@@ -256,7 +115,7 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
     # Drop the original aln_type column.
     bed_df.drop(columns=['aln_type'], inplace=True)
 
-    # Drop the sv_length column since it is noisy
+    # Drop the sv_length column since it is highly correlated with false positive SVs
     bed_df.drop(columns=['sv_length'], inplace=True)
 
     # Print the number of NaN values
@@ -303,7 +162,74 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
     # Drop telomere and centromere columns (they don't affect predictions).
     bed_df.drop(columns=['telomere', 'centromere'], inplace=True)
 
-    # Return the features.
+    # Drop the genotype column from the data.
+    bed_df = bed_df.drop(columns=['genotype'], errors='ignore')
+
+    # Drop the cn_state column from the data.
+    bed_df = bed_df.drop(columns=['cn_state'], errors='ignore')
+
+    # Add distance to nearest other SV call, clustered false positives often appear near real SVs.
+    # Vectorized by chromosome to avoid row-wise apply.
+    logging.info('Computing distance to nearest other SV call (same chromosome)...')
+    logging.info('Applying distance calculation to all rows...')
+    bed_df['dist_to_nearest_sv'] = np.nan
+
+    for chrom, idx in bed_df.groupby('chrom', sort=False).groups.items():
+        chrom_df = bed_df.loc[idx, ['start', 'end']].sort_values(['start', 'end'])
+        n = chrom_df.shape[0]
+
+        if n <= 1:
+            continue
+
+        starts = chrom_df['start'].to_numpy(dtype=np.int64)
+        ends = chrom_df['end'].to_numpy(dtype=np.int64)
+
+        # Previous interval summary.
+        prev_max_end = np.maximum.accumulate(ends)
+        prev_max_end_excl = np.empty(n, dtype=np.int64)
+        prev_max_end_excl[0] = np.iinfo(np.int64).min
+        prev_max_end_excl[1:] = prev_max_end[:-1]
+
+        # Next interval summary.
+        next_start_excl = np.empty(n, dtype=np.int64)
+        next_start_excl[:-1] = starts[1:]
+        next_start_excl[-1] = np.iinfo(np.int64).max
+
+        # Overlap checks with prior/next intervals.
+        overlap_prev = prev_max_end_excl > starts
+        overlap_next = ends > next_start_excl
+        overlap_any = overlap_prev | overlap_next
+
+        # Gap to closest left/right neighbor (touching intervals yield 0).
+        left_gap = starts - prev_max_end_excl
+        right_gap = next_start_excl - ends
+
+        # No-left/no-right sentinels.
+        left_gap[0] = np.iinfo(np.int64).max
+        right_gap[-1] = np.iinfo(np.int64).max
+
+        nearest = np.minimum(left_gap, right_gap).astype(np.float64)
+        nearest[overlap_any] = 0.0
+
+        # Any remaining sentinel values are undefined (should only happen in degenerate cases).
+        sentinel = float(np.iinfo(np.int64).max)
+        nearest[nearest >= sentinel] = np.nan
+
+        bed_df.loc[chrom_df.index, 'dist_to_nearest_sv'] = nearest
+
+    logging.info('Distance to nearest SV calculated. Coverage: %.1f%%', (bed_df['dist_to_nearest_sv'].notna().sum() / len(bed_df) * 100))
+
+    # Print statistics about the distance to nearest SV feature.
+    logging.info('Distance to nearest SV - mean: %.2f, median: %.2f, std: %.2f', bed_df['dist_to_nearest_sv'].mean(), bed_df['dist_to_nearest_sv'].median(), bed_df['dist_to_nearest_sv'].std())
+
+    # Save the first 500 features to a new file.
+    features_file = os.path.join(outdiranno, 'features.tsv')
+    logging.info('Saving the features to %s', features_file)
+    # Save only the first 500 rows to avoid saving too many records.
+    bed_df.head(500).to_csv(features_file, sep='\t', index=False)
+    logging.info('Saved the features to %s', features_file)
+
+    # Return the features dataframe.
     return bed_df
 
 
@@ -382,12 +308,6 @@ def bed_to_annovar_input(bed_file):
     logging.info('Converting the BED file to ANNOVAR input format.')
 
     # Read the BED file using pandas (first line is the header with the column names).
-    # df = pd.read_csv(bed_file, sep='\t', header=None, comment='#',
-    # names=["CHROM", "POS", "END", "SVTYPE", "SVLEN"], skiprows=1)
-    # df = pd.read_csv(bed_file, sep='\t', header=0, comment='#',
-    #                  names=["CHROM", "POS", "END", "SVTYPE", "SVLEN"], usecols=[0, 1, 2, 3, 4],
-    #                  dtype={'CHROM': str, 'POS': np.int32, 'END': np.int32,
-    #                  'SVTYPE': str, 'SVLEN': np.int32})
     df = pd.read_csv(bed_file, sep='\t', usecols=[0, 1, 2],
                      names=["CHROM", "POS", "END"],
                      dtype={'CHROM': str, 'POS': np.int32, 'END': np.int32})
@@ -464,7 +384,6 @@ def annotate(annovar_input, annovar_path, db_path, output_dir, buildversion='hg3
         "--nastring .",
         "-polish"
     ]
-    # "--protocol genomicSuperDups",
 
     try:
         subprocess.run(" ".join(cmd), shell=True, check=True)
@@ -483,33 +402,21 @@ def get_cytoband_is_c_t(chrom_dict, chrom, cytoband):
 
     is_telomere = False
     is_centromere = False
-    # Check if the cytoband is a telomere.
+    # Check if the cytoband annotation indicates telomere or centromere regions.
     try:
-        if 'telomerep' in chrom_dict[chrom] and chrom_dict[chrom]['telomerep'] in cytoband:
-            is_telomere = True
-
-        if 'telomereq' in chrom_dict[chrom] and chrom_dict[chrom]['telomereq'] in cytoband:
-            is_telomere = True
-
-        if 'centromerep' in chrom_dict[chrom] and chrom_dict[chrom]['centromerep'] in cytoband:
+        # Centromeres contain 'acen' in their names.
+        if 'acen' in cytoband:
             is_centromere = True
-
-        if 'centromereq' in chrom_dict[chrom] and chrom_dict[chrom]['centromereq'] in cytoband:
-            is_centromere = True
-
-    except KeyError:
-        pass
-        # Handle the case where chrom_dict[chrom] is not defined.
-        # logging.warning('chrom_dict[%s] is not defined.', chrom)
-        # logging.warning('Cytoband: %s', cytoband)
-        # logging.warning('chrom_dict[%s]: %s', chrom, chrom_dict.get(chrom, 'Not found'))
+        # Telomeres are at the extreme bands - simplistic check for p/q terminal regions
+        # (This is a simplified heuristic; a more robust method would use actual position data)
+        elif 'p11' in cytoband or 'p12' in cytoband or 'p13' in cytoband:  # p-arm terminal
+            is_telomere = True
+        elif 'q13' in cytoband or 'q14' in cytoband:  # q-arm terminal (varies by chromosome)
+            is_telomere = True
 
     except TypeError:
         pass
-        # Handle the case where telomerep is not defined.
-        # logging.warning('chrom_dict[%s] does not have telomerep defined.', chrom)
-        # logging.warning('Cytoband: %s', cytoband)
-        # logging.warning('chrom_dict[%s]: %s', chrom, chrom_dict[chrom])
+        # Handle the case where cytoband is not a string.
 
     return is_telomere, is_centromere
 
@@ -572,7 +479,7 @@ def add_annotations(data, input_bed, annovar_path, db_path, anno_outdir, buildve
     logging.info('Annotating simple repeats using the BED file (GRCh38): %s', simpleRepeat_bed)
     simpleRepeat_df = run_bedtools_intersect(input_bed, simpleRepeat_bed, training_format)
 
-    # Merge the simpleRepeat annotations with the true positive data.
+    # Check if record has any simple repeats (boolean indicator).
     data['simpleRepeat'] = data.merge(simpleRepeat_df, on=['chrom', 'start', 'end'], how='left')['chr_anno'].notna()
 
     logging.info('Number of records with simple repeats: %d', data['simpleRepeat'].sum())
@@ -611,32 +518,18 @@ def add_annotations(data, input_bed, annovar_path, db_path, anno_outdir, buildve
     logging.info('Reading the ANNOVAR output file: %s', anno_file)
     anno_df = pd.read_csv(anno_file, sep='\t', header=0, comment='#')
 
-    # Replace NaN values for the genomicSuperDups column with 0.
-    # anno_df['genomicSuperDups'].fillna(0, inplace=True)
-
-    # # Replace NaN values for the cytoBand column with ""
-    # # anno_df['cytoBand'].fillna("", inplace=True).astype(str)
-    # anno_df['cytoBand'] = anno_df['cytoBand'].fillna("").astype(str)
-
     # Convert chr, start, end to the same data types as the data.
     anno_df['Chr'] = anno_df['Chr'].astype(str)
     anno_df['Start'] = anno_df['Start'].astype(np.int32)
     anno_df['End'] = anno_df['End'].astype(np.int32)
 
     # Merge the ANNOVAR annotations with the data.
-    logging.info('Merging the ANNOVAR annotations with the data.')
+    logging.info('Merging ANNOVAR annotations (%d records) with data (%d records)...', anno_df.shape[0], data.shape[0])
     data = data.merge(anno_df, left_on=['chrom', 'start', 'end'], right_on=['Chr', 'Start', 'End'], how='left')
-
-    # Print the first 20 segdup values.
-    # logging.info('First 20 values of the segdup column: %s', data['genomicSuperDups'].head(20))
-
-    # Extract segmental duplication scores.
-    # def extract_max_score(score_series):
-    #     """Extract and return the maximum Score= value from a series."""
-    #     scores = score_series.str.extract(r'Score=([\d\.]+)')[0].dropna().astype(float)
-    #     return scores.max() if not scores.empty else 0
+    logging.info('ANNOVAR merge completed.')
     
     # Extract segmental duplication scores.
+    logging.info('Extracting segmental duplication scores...')
     def extract_scores(score_str):
         """Extract and return the segmental duplication scores from a string."""
         if pd.isna(score_str) or score_str == '.':
@@ -651,8 +544,10 @@ def add_annotations(data, input_bed, annovar_path, db_path, anno_outdir, buildve
 
     # Extract the segmental duplication scores.
     data['segdup'] = data['genomicSuperDups'].apply(extract_scores)
+    logging.info('Segmental duplication scores extracted. Mean: %.3f', data['segdup'].mean())
 
     # Extract the cytoband annotations.
+    logging.info('Processing cytoband annotations for telomere/centromere detection...')
     def get_cyto_info(row):
         """Get telomere and centromere information for a row."""
         if pd.notna(row['cytoBand']):
@@ -660,17 +555,229 @@ def add_annotations(data, input_bed, annovar_path, db_path, anno_outdir, buildve
         
         return (False, False)
     
-    data['telomere'], data['centromere'] = data.apply(get_cyto_info, axis=1, result_type='expand')
+    cyto_flags = data.apply(get_cyto_info, axis=1, result_type='expand')
+    data[['telomere', 'centromere']] = cyto_flags
+    logging.info('Telomere/centromere annotation complete. Telomeres: %d, Centromeres: %d', data['telomere'].sum(), data['centromere'].sum())
 
+    # Add feature dist_to_telomere, dist_to_centromere using vectorized operations.
+    logging.info('Computing distances to chromosome telomeres and centromeres...')
+    chrom_bounds = pd.DataFrame([
+        {
+            'chrom': chrom,
+            'chrom_norm': normalize_chrom_label(chrom),
+            'chrom_start': values.get('chrom_start', np.nan),
+            'chrom_end': values.get('chrom_end', np.nan),
+            'centromere_start': values.get('centromere_start', np.nan),
+            'centromere_end': values.get('centromere_end', np.nan)
+        }
+        for chrom, values in cytoband_dict.items()
+    ])
+
+    data_with_bounds = data.copy()
+    data_with_bounds['chrom_norm'] = data_with_bounds['chrom'].apply(normalize_chrom_label)
+    data_with_bounds = data_with_bounds.merge(
+        chrom_bounds[['chrom_norm', 'chrom_start', 'chrom_end', 'centromere_start', 'centromere_end']],
+        on='chrom_norm',
+        how='left'
+    )
+
+    starts = data_with_bounds['start'].to_numpy(dtype=np.float64)
+    ends = data_with_bounds['end'].to_numpy(dtype=np.float64)
+    chrom_starts = data_with_bounds['chrom_start'].to_numpy(dtype=np.float64)
+    chrom_ends = data_with_bounds['chrom_end'].to_numpy(dtype=np.float64)
+    centromere_starts = data_with_bounds['centromere_start'].to_numpy(dtype=np.float64)
+    centromere_ends = data_with_bounds['centromere_end'].to_numpy(dtype=np.float64)
+
+    # Telomere distance: nearest interval-to-point distance to chromosome start/end.
+    dist_left_tel = np.minimum(np.abs(starts - chrom_starts), np.abs(ends - chrom_starts))
+    dist_right_tel = np.minimum(np.abs(starts - chrom_ends), np.abs(ends - chrom_ends))
+    dist_to_telomere = np.minimum(dist_left_tel, dist_right_tel)
+    tel_valid = (~np.isnan(chrom_starts)) & (~np.isnan(chrom_ends))
+    dist_to_telomere[~tel_valid] = np.nan
+
+    # Centromere distance: 0 if overlapping centromere span, else gap to nearest boundary.
+    cen_valid = (~np.isnan(centromere_starts)) & (~np.isnan(centromere_ends))
+    dist_to_centromere = np.full(len(data_with_bounds), np.nan, dtype=np.float64)
+    left_of_centromere = ends < centromere_starts
+    right_of_centromere = starts > centromere_ends
+    overlap_centromere = (~left_of_centromere) & (~right_of_centromere)
+    dist_to_centromere[cen_valid & left_of_centromere] = (centromere_starts - ends)[cen_valid & left_of_centromere]
+    dist_to_centromere[cen_valid & right_of_centromere] = (starts - centromere_ends)[cen_valid & right_of_centromere]
+    dist_to_centromere[cen_valid & overlap_centromere] = 0.0
+
+    data['dist_to_telomere'] = dist_to_telomere
+    data['dist_to_centromere'] = dist_to_centromere
+    tel_zero_pct = (data['dist_to_telomere'] == 0).mean() * 100
+    cen_zero_pct = (data['dist_to_centromere'] == 0).mean() * 100
+    cen_le1_pct = (data['dist_to_centromere'] <= 1).mean() * 100
+    cen_desc = data['dist_to_centromere'].describe(percentiles=[0.5, 0.9, 0.99])
+    # Diagnostics for coordinate issues that can indicate malformed records.
+    out_of_bounds_pct = ((data_with_bounds['start'] < data_with_bounds['chrom_start']) | (data_with_bounds['end'] > data_with_bounds['chrom_end'])).mean() * 100
+    logging.info(
+        'Telomere/centromere distances calculated. Mean dist_to_telomere: %.2f, Mean dist_to_centromere: %.2f, telomere zeros: %.2f%%, centromere zeros: %.2f%%, out-of-bounds coords: %.2f%%',
+        data['dist_to_telomere'].mean(),
+        data['dist_to_centromere'].mean(),
+        tel_zero_pct,
+        cen_zero_pct,
+        out_of_bounds_pct
+    )
+    logging.info(
+        'Centromere distance distribution: min=%.2f, p50=%.2f, p90=%.2f, p99=%.2f, max=%.2f, <=1bp: %.2f%%',
+        cen_desc['min'],
+        cen_desc['50%'],
+        cen_desc['90%'],
+        cen_desc['99%'],
+        cen_desc['max'],
+        cen_le1_pct
+    )
+
+    # Log-transform long-tailed distance features for model stability.
+    logging.info('Applying log1p transform to dist_to_telomere and dist_to_centromere...')
+    data['dist_to_telomere'] = np.log1p(data['dist_to_telomere'])
+    data['dist_to_centromere'] = np.log1p(data['dist_to_centromere'])
+    logging.info(
+        'Distance log-transform complete. Mean log-dist_to_telomere: %.3f, Mean log-dist_to_centromere: %.3f',
+        data['dist_to_telomere'].mean(),
+        data['dist_to_centromere'].mean()
+    )
+
+    # Helper function to compute repeat density across entire SV span
+    def compute_repeat_density_span(data_df, repeat_overlap_df):
+        """Compute repeat span density as the fraction of the SV covered by simple repeats."""
+        repeat_copy = repeat_overlap_df.copy()
+        repeat_copy['overlap_length'] = repeat_copy['end_anno'] - repeat_copy['start_anno']
+        
+        # Group by original SV coordinates and sum total overlapping lengths
+        density_df = repeat_copy.groupby(['chrom', 'start', 'end'])['overlap_length'].sum().reset_index()
+        density_df.columns = ['chrom', 'start', 'end', 'total_repeat_length']
+        
+        # Merge with data and calculate density
+        merged = data_df.merge(density_df, on=['chrom', 'start', 'end'], how='left')
+        merged['total_repeat_length'] = merged['total_repeat_length'].fillna(0)
+        span_length = (merged['end'] - merged['start']).astype(float)
+        zero_span_count = (span_length <= 0).sum()
+        if zero_span_count > 0:
+            logging.info('Found %d SV records with non-positive span; setting repeat_span_density to 0 for these records.', zero_span_count)
+        valid_span = span_length > 0
+        density_values = pd.Series(0.0, index=merged.index)
+        density_values.loc[valid_span] = merged.loc[valid_span, 'total_repeat_length'] / span_length.loc[valid_span]
+        density_values = density_values.clip(lower=0, upper=1)
+        
+        return density_values
+    
+    # Add breakpoint features from both breakpoints (vectorized by chromosome).
+    logging.info('Computing breakpoint features (segdup and simple repeat at left/right breakpoints)...')
+
+    def point_max_overlap_score(points, starts, ends, scores):
+        """For each query point, return max score among overlapping intervals."""
+        if len(starts) == 0:
+            return np.zeros(len(points), dtype=np.float64)
+
+        order = np.argsort(starts, kind='mergesort')
+        starts = starts[order]
+        ends = ends[order]
+        scores = scores[order]
+
+        point_order = np.argsort(points, kind='mergesort')
+        result = np.zeros(len(points), dtype=np.float64)
+
+        active = []  # max-heap via negative score: (-score, interval_end)
+        interval_idx = 0
+        n_intervals = len(starts)
+
+        for point_idx in point_order:
+            point = points[point_idx]
+
+            while interval_idx < n_intervals and starts[interval_idx] <= point:
+                heapq.heappush(active, (-scores[interval_idx], ends[interval_idx]))
+                interval_idx += 1
+
+            while active and active[0][1] < point:
+                heapq.heappop(active)
+
+            if active:
+                result[point_idx] = -active[0][0]
+
+        return result
+
+    def point_in_any_interval(points, starts, ends):
+        """For each query point, return whether it is covered by any interval."""
+        if len(starts) == 0:
+            return np.zeros(len(points), dtype=bool)
+
+        order = np.argsort(starts, kind='mergesort')
+        starts_sorted = starts[order]
+        ends_sorted = ends[order]
+        max_end_prefix = np.maximum.accumulate(ends_sorted)
+
+        idx = np.searchsorted(starts_sorted, points, side='right') - 1
+        covered = np.zeros(len(points), dtype=bool)
+        valid = idx >= 0
+        covered[valid] = max_end_prefix[idx[valid]] >= points[valid]
+
+        return covered
+
+    # Precompute interval arrays by chromosome for fast lookup.
+    anno_segdup = anno_df[['Chr', 'Start', 'End', 'genomicSuperDups']].copy()
+    anno_segdup['segdup_score'] = anno_segdup['genomicSuperDups'].apply(extract_scores)
+    segdup_intervals = {
+        normalize_chrom_label(chrom): (
+            grp['Start'].to_numpy(dtype=np.int64),
+            grp['End'].to_numpy(dtype=np.int64),
+            grp['segdup_score'].to_numpy(dtype=np.float64)
+        )
+        for chrom, grp in anno_segdup.groupby('Chr', sort=False)
+    }
+
+    repeat_intervals = {
+        normalize_chrom_label(chrom): (
+            grp['start_anno'].to_numpy(dtype=np.int64),
+            grp['end_anno'].to_numpy(dtype=np.int64)
+        )
+        for chrom, grp in simpleRepeat_df.groupby('chrom', sort=False)
+    }
+
+    # Allocate result columns.
+    data['segdup_left'] = 0.0
+    data['segdup_right'] = 0.0
+    data['simpleRepeat_left'] = False
+    data['simpleRepeat_right'] = False
+
+    logging.info('Computing left breakpoint features...')
+    for chrom, chrom_idx in data.groupby('chrom', sort=False).groups.items():
+        idx = list(chrom_idx)
+        left_points = data.loc[idx, 'start'].to_numpy(dtype=np.int64)
+        right_points = data.loc[idx, 'end'].to_numpy(dtype=np.int64)
+        chrom_norm = normalize_chrom_label(chrom)
+
+        seg_starts, seg_ends, seg_scores = segdup_intervals.get(
+            chrom_norm, (np.array([], dtype=np.int64), np.array([], dtype=np.int64), np.array([], dtype=np.float64))
+        )
+        rep_starts, rep_ends = repeat_intervals.get(
+            chrom_norm, (np.array([], dtype=np.int64), np.array([], dtype=np.int64))
+        )
+
+        data.loc[idx, 'segdup_left'] = point_max_overlap_score(left_points, seg_starts, seg_ends, seg_scores)
+        data.loc[idx, 'simpleRepeat_left'] = point_in_any_interval(left_points, rep_starts, rep_ends)
+
+        data.loc[idx, 'segdup_right'] = point_max_overlap_score(right_points, seg_starts, seg_ends, seg_scores)
+        data.loc[idx, 'simpleRepeat_right'] = point_in_any_interval(right_points, rep_starts, rep_ends)
+
+    logging.info('Breakpoint features complete. segdup_left mean: %.3f, segdup_right mean: %.3f', data['segdup_left'].mean(), data['segdup_right'].mean())
+    
+    # Calculate repeat span density feature using the simpleRepeat annotations. For each record, calculate the repeat span density as the total overlapping length of all simple repeats divided by the length of the record (end - start).
+    logging.info('Computing repeat span density (total repeat coverage across SV)...')
+    data['repeat_span_density'] = compute_repeat_density_span(data, simpleRepeat_df)  # across entire SV
+    logging.info('Repeat span density calculated. Mean: %.3f, Max: %.3f', data['repeat_span_density'].mean(), data['repeat_span_density'].max())
+    
     # Print the current columns in the data.
     logging.info('Current columns in the data: %s', data.columns)
 
-    # Drop the unnecessary columns.
-    data.drop(columns=['Chr', 'Start', 'End', 'cytoBand', 'genomicSuperDups', 'Ref', 'Alt'], inplace=True)
+    # Drop the unnecessary/redundant columns.
+    data.drop(columns=['Chr', 'Start', 'End', 'cytoBand', 'genomicSuperDups', 'Ref', 'Alt', 'segdup', 'simpleRepeat'], inplace=True)
 
     logging.info('Dropped the unnecessary columns. Current columns: %s', data.columns)
 
     logging.info('Number of records after adding annotations: %d', data.shape[0])
-    # logging.info('First 5 rows of the data after adding annotations:\n%s', data.head())
 
     return data
