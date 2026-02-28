@@ -470,18 +470,31 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
                     logging.info('SHAP RF: explain_size=%d, background_size=%d (from %d total)', 
                                  explain_size, background_size, len(X_train_numeric))
                     
-                    # Use tree_path_dependent which is faster and more memory-efficient
-                    explainer = shap.TreeExplainer(classifier, feature_perturbation='tree_path_dependent', 
-                                                    model_output='probability')
+                    # Use interventional mode for standard SHAP values (not interactions)
+                    explainer = shap.TreeExplainer(classifier)
                     shap_values = explainer.shap_values(X_explain, check_additivity=False)
                     
-                    # Handle binary classification output (list of 2 arrays)
+                    logging.info('SHAP raw output type: %s, raw shape: %s', 
+                                 type(shap_values), 
+                                 shap_values.shape if hasattr(shap_values, 'shape') else 'N/A')
+                    
+                    # Handle different output formats
                     if isinstance(shap_values, list):
+                        # List of arrays for each class
                         shap_values = shap_values[1]  # Use positive class
+                    elif len(shap_values.shape) == 3:
+                        # 3D array: (n_samples, n_features, n_classes)
+                        shap_values = shap_values[:, :, 1]  # Select positive class
+                    
+                    logging.info('SHAP debug: shap_values shape=%s (final), X_explain shape=%s', 
+                                 shap_values.shape, X_explain.shape)
+                    
+                    # Ensure X_explain is explicitly indexed by feature names
+                    X_explain_for_plot = X_explain.reset_index(drop=True)
                     
                     # SHAP summary plot
-                    plt.figure(figsize=(10, 8))
-                    shap.summary_plot(shap_values, X_explain, show=False)
+                    plt.figure(figsize=(12, 8))
+                    shap.summary_plot(shap_values, X_explain_for_plot, show=False, max_display=15)
                     shap_plot_path = os.path.join(output_directory, model_name_fp + '_shap_summary_plot.png')
                     plt.savefig(shap_plot_path, dpi=300, bbox_inches='tight')
                     plt.close()
