@@ -125,8 +125,8 @@ def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Dist
     id_col = feature_df.pop('id')
     
     # Remove other non-feature columns before prediction.
-    # Keep normalized *_per_kb features; remove raw versions.
-    for col in ['chrom', 'start', 'end', 'sv_type_str', 'cluster_size', 'dist_to_nearest_sv', 'read_depth']:
+    # Keep cluster_size and dist_to_nearest_sv; remove raw read_depth (keep read_depth_normalized).
+    for col in ['chrom', 'start', 'end', 'sv_type_str', 'read_depth']:
         if col in feature_df.columns:
             feature_df.pop(col)
     
@@ -175,8 +175,10 @@ def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Dist
     # Create a VCF file with only the filtered variants
     removed_svs_vcf = os.path.join(output_dir, 'removed_svs.vcf')
 
-    # Filter the input VCF file based on the filtered indices
-    logging.info('Filtering the input VCF file based on the filtered indices...')
+    # Filter the input VCF file based on the filtered indices and SV length
+    # Keep all SVs >10kb regardless of confidence score; apply confidence threshold to SVs <=10kb
+    logging.info('Filtering the input VCF file based on the filtered indices and SV length...')
+    logging.info('Policy: Keep all SVs >10kb; apply confidence threshold (%.3f) to SVs <=10kb', prob_threshold)
     filtered_records = set(filtered_ids)
     current_record = 0
     pass_count = 0
@@ -189,21 +191,38 @@ def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Dist
                 vcf_out.write(line)
                 removed_out.write(line)
             else:
-                if current_record in filtered_records:
-                    # Write the line to the removed_svs.vcf file if the current record is in the filtered records
-                    removed_out.write(line)
-                    filter_count += 1
-                else:
-                    # Write the line if the current record is not in the filtered records
+                # Extract SVLEN from the VCF INFO field
+                info_field = line.split('\t')[7]
+                svlen_match = None
+                for field in info_field.split(';'):
+                    if field.startswith('SVLEN='):
+                        try:
+                            svlen_match = int(field.split('=')[1])
+                        except (ValueError, IndexError):
+                            svlen_match = None
+                        break
+                
+                # Determine if variant should be kept
+                is_large_sv = svlen_match is not None and abs(svlen_match) > 10000
+                is_below_threshold = current_record in filtered_records
+                
+                # Keep if: (large SV) OR (below confidence threshold)
+                # Note: is_below_threshold means confidence score < threshold, i.e., variant is confident/passing
+                if is_large_sv or not is_below_threshold:
+                    # Write the line if the current record is not in the filtered records OR if it's a large SV
                     vcf_out.write(line)
                     pass_count += 1
+                else:
+                    # Write the line to the removed_svs.vcf file if it's filtered by confidence threshold and <=10kb
+                    removed_out.write(line)
+                    filter_count += 1
 
                 total_records += 1
                 current_record += 1
 
     logging.info('Filtered the input VCF file and saved it to %s', output_vcf)
     logging.info('Scoring process completed successfully. Passed %d out of %d records.', pass_count, total_records)
-    logging.info('Removed %d records. See %s for details.', filter_count, removed_svs_vcf)
+    logging.info('Removed %d records (low confidence and <=10kb). See %s for details.', filter_count, removed_svs_vcf)
 
 
 if __name__ == '__main__':

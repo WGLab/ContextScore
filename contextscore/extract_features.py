@@ -107,6 +107,14 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
                          names=['chrom', 'start', 'end', 'sv_type', 'sv_length', 'genotype', 'read_depth', 'hmm_llh', 'aln_type', 'cluster_size', 'cn_state', 'aln_offset', 'id'],
                          dtype={'chrom': str, 'start': np.int32, 'end': np.int32, 'sv_type': str, 'sv_length': np.int32, 'genotype': str, 'read_depth': np.int32, 'hmm_llh': np.float32, 'aln_type': str, 'cluster_size': np.int32, 'cn_state': np.int32, 'aln_offset': np.int32, 'id': np.int32})
 
+    # Ensure SV length is positive
+    bed_df['sv_length'] = bed_df['sv_length'].abs()
+
+    # Throw error if any SV lengths are negative
+    if (bed_df['sv_length'] < 0).any():
+        logging.error('Negative SV lengths found in the BED file.')
+        sys.exit(1)
+
     # Drop the genotype column and cn_state columns (due to redundancy).
     bed_df.drop(columns=['genotype', 'cn_state'], inplace=True)
 
@@ -119,14 +127,6 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
 
     # Drop the original aln_type column.
     bed_df.drop(columns=['aln_type'], inplace=True)
-
-    # Create normalized cluster_size feature (cluster_size per 1000 bp of SV length)
-    # This prevents large sparse SVs from being unfairly penalized
-    bed_df['cluster_size_per_kb'] = np.where(
-        bed_df['sv_length'] > 0,
-        bed_df['cluster_size'] / (bed_df['sv_length'] / 1000.0),
-        0
-    )
 
     # Read depth normalized by sample coverage
     bed_df['read_depth_normalized'] = np.where(
@@ -170,7 +170,6 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
 
     # Add annotations to the features.
     bed_df = add_annotations(bed_df, input_bed, annovar_path, db_path, outdiranno, buildversion, training_format)
-    logging.info('Added ANNOVAR annotations to the features. Updated columns: %s', bed_df.columns)
 
     # Print the number of NaN values
     logging.info('Number of NaN values: %d', bed_df.isnull().sum().sum())
@@ -242,15 +241,8 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
     # Print statistics about the distance to nearest SV feature.
     logging.info('Distance to nearest SV - mean: %.2f, median: %.2f, std: %.2f', bed_df['dist_to_nearest_sv'].mean(), bed_df['dist_to_nearest_sv'].median(), bed_df['dist_to_nearest_sv'].std())
 
-    # Normalize by SV size
-    bed_df['dist_nearest_sv_per_kb'] = np.where(
-        bed_df['sv_length'] > 0,
-        bed_df['dist_to_nearest_sv'] / (bed_df['sv_length'] / 1000.0),
-        bed_df['dist_to_nearest_sv']
-    )
-
     # Now drop sv_length since all normalizations are complete
-    bed_df.drop(columns=['sv_length'], inplace=True)
+    # bed_df.drop(columns=['sv_length'], inplace=True)
 
     # Save the first 500 features to a new file.
     features_file = os.path.join(outdiranno, 'features.tsv')
@@ -370,25 +362,47 @@ def bed_to_annovar_input(bed_file):
 
 
 def download_annovar_db(annovar_path, db_path, db_name, buildversion='hg38'):
-    """Download the ANNOVAR database if it does not exist."""
-    logging.info('Downloading the database:' + db_name + ' for build version: ' + buildversion)
+    """Download the ANNOVAR database if it does not exist.
+    
+    Returns True if successful or database already exists, False if download failed.
+    """
+    logging.info('Downloading the database: %s for build version: %s', db_name, buildversion)
+    
+    # Check if database files already exist
+    expected_files = [
+        os.path.join(db_path, f"{buildversion}_{db_name}.txt"),
+        os.path.join(db_path, f"{buildversion}_{db_name}.txt.idx"),
+    ]
+    
+    if all(os.path.exists(f) for f in expected_files):
+        logging.info('Database %s already exists, skipping download.', db_name)
+        return True
+    
+    # Ensure the database directory exists
+    os.makedirs(db_path, exist_ok=True)
+    
     cmd = [
         f"{annovar_path}/annotate_variation.pl",
         "-buildver", buildversion,
         "-downdb", db_name,
-        db_path
+        "."  # Download to current directory (we'll set cwd=db_path)
     ]
-    # annotate_variation.pl -build hg19 -downdb phastConsElements46way humandb/
 
-    # Run the command to download the database.
-    logging.info('Running the command to download the database: %s', " ".join(cmd))
+    # Run the command to download the database from the db_path directory
+    # This ensures files are downloaded directly to the correct location
+    logging.info('Running the command to download the database: %s (in directory: %s)', " ".join(cmd), db_path)
     try:
-        subprocess.run(" ".join(cmd), shell=True, check=True)
+        result = subprocess.run(" ".join(cmd), shell=True, check=True, capture_output=True, text=True, cwd=db_path)
+        if result.stdout:
+            logging.debug('Download stdout: %s', result.stdout)
+        logging.info('Downloaded the database %s successfully.', db_name)
+        return True
     except subprocess.CalledProcessError as e:
-        logging.error('Error downloading the database: %s', e)
-        logging.error('Please check the ANNOVAR path and database path.')
-        sys.exit(1)
-    logging.info('Downloaded the database %s successfully.', db_name)
+        logging.warning('Failed to download the database %s: %s', db_name, e)
+        if e.stderr:
+            logging.warning('Error output: %s', e.stderr)
+        logging.warning('Continuing without this database. Some features may be missing.')
+        return False
 
 
 def annotate(annovar_input, annovar_path, db_path, output_dir, buildversion='hg38'):
@@ -514,10 +528,10 @@ def add_annotations(data, input_bed, annovar_path, db_path, anno_outdir, buildve
     # Annotate the SVs using ANNOVAR.
     
     # Download the segmental duplication database
-    download_annovar_db(annovar_path, db_path, "genomicSuperDups", buildversion)
+    segdup_success = download_annovar_db(annovar_path, db_path, "genomicSuperDups", buildversion)
 
     # Download the cytoband database
-    download_annovar_db(annovar_path, db_path, "cytoBand", buildversion)
+    cytoband_success = download_annovar_db(annovar_path, db_path, "cytoBand", buildversion)
 
     # Set up a dictionary for each chromosome, mapping the cytoband to the
     # centromere and telomere regions.
@@ -799,20 +813,5 @@ def add_annotations(data, input_bed, annovar_path, db_path, anno_outdir, buildve
     data.drop(columns=['Chr', 'Start', 'End', 'cytoBand', 'genomicSuperDups', 'Ref', 'Alt', 'segdup', 'simpleRepeat'], inplace=True)
 
     logging.info('Number of records after adding annotations: %d', data.shape[0])
-
-    # Debug: Print read depths for large inversions
-    if 'sv_type_str' in data.columns and 'read_depth' in data.columns:
-        large_inversions = data[(data['sv_type_str'] == 'INV') & (data['end'] - data['start'] > 10000)]
-        if len(large_inversions) > 0:
-            logging.info('Debug: Large inversions (>10kb) found: %d records', len(large_inversions))
-            for idx, row in large_inversions.head(10).iterrows():
-                logging.info('  INV: chrom=%s, start=%d, end=%d, size=%d bp, read_depth=%d', 
-                           row.get('chrom', 'N/A'), 
-                           row.get('start', 0), 
-                           row.get('end', 0),
-                           row.get('end', 0) - row.get('start', 0),
-                           row.get('read_depth', -1))
-            if len(large_inversions) > 10:
-                logging.info('  ... and %d more large inversions', len(large_inversions) - 10)
 
     return data

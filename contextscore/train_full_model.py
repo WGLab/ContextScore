@@ -248,12 +248,20 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
     # Combine the true positive and false positive data.
     data = pd.concat([tp_data, fp_data], ignore_index=True)  # Ignore the index to realign the indices.
 
+    # Filter to keep only SVs with length <= 10kb for training
+    # (large SVs >10kb will always be kept in predictions)
+    logging.info('Filtering to keep only SVs with sv_length <= 10000 bp for training...')
+    data_before_size_filter = data.shape[0]
+    data = data[data['sv_length'] <= 10000]
+    data_after_size_filter = data.shape[0]
+    logging.info('Removed %d SVs with length > 10000 bp. Remaining training samples: %d', data_before_size_filter - data_after_size_filter, data_after_size_filter)
+
     # Pop the chrom column to use it later for cross-validation.
     chrom_col = data.pop('chrom')
 
     # Drop columns that are not needed for training.
-    # Keep normalized *_per_kb features; remove raw versions.
-    data = data.drop(columns=['start', 'end', 'sv_type_str', 'cluster_size', 'dist_to_nearest_sv', 'read_depth'], errors='ignore')
+    # Keep cluster_size and dist_to_nearest_sv; remove raw read_depth (keep read_depth_normalized).
+    data = data.drop(columns=['start', 'end', 'sv_type_str', 'read_depth'], errors='ignore')
 
     logging.info('Columns list after preprocessing: %s', data.columns.tolist())
 
