@@ -136,8 +136,16 @@ def impute_missing_values(tp_data, fp_data):
 
     return tp_data, fp_data
 
-def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp_platinum_grch38, fp_platinum_grch38, output_directory, annovar_path, db_path, outdiranno, leave_out="none", split_80_20=False):
-    """Train the binary classification model."""
+def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp_na12877_grch38, fp_na12877_grch38, tp_na12878_grch38, fp_na12878_grch38, tp_na12879_grch38, fp_na12879_grch38, output_directory, annovar_path, db_path, outdiranno, leave_out="none", split_80_20=False, sample_coverage_hg002=None, sample_coverage_visor=None, sample_coverage_na12877=None, sample_coverage_na12878=None, sample_coverage_na12879=None):
+    """Train the binary classification model.
+    
+    Args:
+        sample_coverage_hg002 (float): Required. Mean read depth coverage for HG002 sample.
+        sample_coverage_visor (float): Required. Mean read depth coverage for Visor sample.
+        sample_coverage_na12877 (float): Required. Mean read depth coverage for NA12877 sample.
+        sample_coverage_na12878 (float): Required. Mean read depth coverage for NA12878 sample.
+        sample_coverage_na12879 (float): Required. Mean read depth coverage for NA12879 sample.
+    """
 
     # ---------------------------------------------------------------
     # SV Feature Extraction
@@ -154,9 +162,13 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
         tp_visor_grch38 = None
         fp_visor_grch38 = None
     elif leave_out == "platinum":
-        logging.info('Leaving out Platinum Pedigree dataset from training.')
-        tp_platinum_grch38 = None
-        fp_platinum_grch38 = None
+        logging.info('Leaving out Platinum Pedigree datasets (all 3 samples) from training.')
+        tp_na12877_grch38 = None
+        fp_na12877_grch38 = None
+        tp_na12878_grch38 = None
+        fp_na12878_grch38 = None
+        tp_na12879_grch38 = None
+        fp_na12879_grch38 = None
     else:
         logging.info('Not leaving out any dataset from training.')
         no_leave_out = True
@@ -167,22 +179,28 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
     # GRCh38 data.
     logging.info('Extracting features from the true positive and false positive VCF files (GRCh38).')
     buildversion = 'hg38'
-    tp_visor_anno = extract_features(tp_visor_grch38, annovar_path, db_path, os.path.join(outdiranno, "tp_anno_grch38"), buildversion=buildversion) if tp_visor_grch38 is not None else None
-    fp_visor_anno = extract_features(fp_visor_grch38, annovar_path, db_path, os.path.join(outdiranno, "fp_anno_grch38"), buildversion=buildversion) if fp_visor_grch38 is not None else None
+    tp_visor_anno = extract_features(tp_visor_grch38, annovar_path, db_path, os.path.join(outdiranno, "tp_visor_anno_grch38"), buildversion=buildversion, sample_coverage=sample_coverage_visor) if tp_visor_grch38 is not None else None
+    fp_visor_anno = extract_features(fp_visor_grch38, annovar_path, db_path, os.path.join(outdiranno, "fp_visor_anno_grch38"), buildversion=buildversion, sample_coverage=sample_coverage_visor) if fp_visor_grch38 is not None else None
     
-    tp_platinum_anno = extract_features(tp_platinum_grch38, annovar_path, db_path, os.path.join(outdiranno, "tp_anno_grch38"), buildversion=buildversion) if tp_platinum_grch38 is not None else None
-    fp_platinum_anno = extract_features(fp_platinum_grch38, annovar_path, db_path, os.path.join(outdiranno, "fp_anno_grch38"), buildversion=buildversion) if fp_platinum_grch38 is not None else None
+    tp_na12877_anno = extract_features(tp_na12877_grch38, annovar_path, db_path, os.path.join(outdiranno, "tp_na12877_anno_grch38"), buildversion=buildversion, sample_coverage=sample_coverage_na12877) if tp_na12877_grch38 is not None else None
+    fp_na12877_anno = extract_features(fp_na12877_grch38, annovar_path, db_path, os.path.join(outdiranno, "fp_na12877_anno_grch38"), buildversion=buildversion, sample_coverage=sample_coverage_na12877) if fp_na12877_grch38 is not None else None
+    
+    tp_na12878_anno = extract_features(tp_na12878_grch38, annovar_path, db_path, os.path.join(outdiranno, "tp_na12878_anno_grch38"), buildversion=buildversion, sample_coverage=sample_coverage_na12878) if tp_na12878_grch38 is not None else None
+    fp_na12878_anno = extract_features(fp_na12878_grch38, annovar_path, db_path, os.path.join(outdiranno, "fp_na12878_anno_grch38"), buildversion=buildversion, sample_coverage=sample_coverage_na12878) if fp_na12878_grch38 is not None else None
+    
+    tp_na12879_anno = extract_features(tp_na12879_grch38, annovar_path, db_path, os.path.join(outdiranno, "tp_na12879_anno_grch38"), buildversion=buildversion, sample_coverage=sample_coverage_na12879) if tp_na12879_grch38 is not None else None
+    fp_na12879_anno = extract_features(fp_na12879_grch38, annovar_path, db_path, os.path.join(outdiranno, "fp_na12879_anno_grch38"), buildversion=buildversion, sample_coverage=sample_coverage_na12879) if fp_na12879_grch38 is not None else None
 
     # HG002 data (GRCh37).
     logging.info('Extracting features from the true positive and false positive VCF files (HG002-GRCh37).')
     buildversion = 'hg19'
-    tp_hg002_anno = extract_features(tp_hg002_grch37, annovar_path, db_path, os.path.join(outdiranno, "tp_anno_grch37"), buildversion=buildversion) if tp_hg002_grch37 is not None else None
-    fp_hg002_anno = extract_features(fp_hg002_grch37, annovar_path, db_path, os.path.join(outdiranno, "fp_anno_grch37"), buildversion=buildversion) if fp_hg002_grch37 is not None else None
+    tp_hg002_anno = extract_features(tp_hg002_grch37, annovar_path, db_path, os.path.join(outdiranno, "tp_anno_grch37"), buildversion=buildversion, sample_coverage=sample_coverage_hg002) if tp_hg002_grch37 is not None else None
+    fp_hg002_anno = extract_features(fp_hg002_grch37, annovar_path, db_path, os.path.join(outdiranno, "fp_anno_grch37"), buildversion=buildversion, sample_coverage=sample_coverage_hg002) if fp_hg002_grch37 is not None else None
 
     # Concatenate the data from all datasets.
     logging.info('Concatenating the data from all datasets.')
-    tp_data = pd.concat([df for df in [tp_visor_anno, tp_platinum_anno, tp_hg002_anno] if df is not None], ignore_index=True)
-    fp_data = pd.concat([df for df in [fp_visor_anno, fp_platinum_anno, fp_hg002_anno] if df is not None], ignore_index=True)
+    tp_data = pd.concat([df for df in [tp_visor_anno, tp_na12877_anno, tp_na12878_anno, tp_na12879_anno, tp_hg002_anno] if df is not None], ignore_index=True)
+    fp_data = pd.concat([df for df in [fp_visor_anno, fp_na12877_anno, fp_na12878_anno, fp_na12879_anno, fp_hg002_anno] if df is not None], ignore_index=True)
 
     # ---------------------------------------------------------------
     # Data Preprocessing
@@ -196,38 +214,6 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
     fp_data.drop_duplicates(inplace=True)
     fp_count_after = fp_data.shape[0]
     logging.info('Removed %d tp duplicates and %d fp duplicates from the concatenated data. Remaining true positives: %d, remaining false positives: %d', tp_count_before - tp_count_after, fp_count_before - fp_count_after, tp_data.shape[0], fp_data.shape[0])
-
-    # Perform robust scaling on the read_depth and cluster_size columns
-    # using the TP distribution as the reference point.
-    # RobustScaler formula: scaled = (x - median) / IQR
-    # By fitting on TP only and applying to both TP and FP, we ask:
-    # "How far from a typical true SV is this value?"
-    # This creates a meaningful signal: TP should cluster near 0, FP should be outliers.
-    logging.info('Normalizing read_depth and cluster_size using TP distribution as reference.')
-    from sklearn.preprocessing import RobustScaler
-    
-    scaler_tp = RobustScaler()
-    
-    # Fit scaler ONLY on TP data
-    if tp_data.shape[0] > 0 and 'read_depth' in tp_data.columns and 'cluster_size' in tp_data.columns:
-        scaler_tp.fit(tp_data[['read_depth', 'cluster_size']])
-        logging.info('Fitted TP scaler on %d TP samples', tp_data.shape[0])
-        logging.info('TP read_depth - median: %.2f, IQR: %.2f', 
-                     scaler_tp.center_[0], 
-                     scaler_tp.scale_[0])
-        
-        # Apply TP scaler to BOTH TP and FP data
-        tp_data[['read_depth', 'cluster_size']] = scaler_tp.transform(tp_data[['read_depth', 'cluster_size']])
-        logging.info('Applied TP scaler to TP data. Stats: read_depth mean=%.2f, std=%.2f', 
-                     tp_data['read_depth'].mean(), tp_data['read_depth'].std())
-    
-    if fp_data.shape[0] > 0 and 'read_depth' in fp_data.columns and 'cluster_size' in fp_data.columns:
-        # Use the SAME TP scaler on FP data
-        fp_data[['read_depth', 'cluster_size']] = scaler_tp.transform(fp_data[['read_depth', 'cluster_size']])
-        logging.info('Applied TP scaler to FP data. Stats: read_depth mean=%.2f, std=%.2f', 
-                     fp_data['read_depth'].mean(), fp_data['read_depth'].std())
-    
-    logging.info('Normalization completed. TP and FP are now scaled relative to TP distribution.')
 
     # Drop SV length features since they are highly correlated with the SV type feature and may lead to overfitting.
     # logging.info('Dropping SV length feature from the data.')
@@ -266,10 +252,8 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
     chrom_col = data.pop('chrom')
 
     # Drop columns that are not needed for training.
-    data = data.drop(columns=['start', 'end', 'sv_type_str'], errors='ignore')
-
-    # Drop the read_depth and cluster_size columns
-    # data = data.drop(columns=['read_depth', 'cluster_size'], errors='ignore')
+    # Keep normalized *_per_kb features; remove raw versions.
+    data = data.drop(columns=['start', 'end', 'sv_type_str', 'cluster_size', 'dist_to_nearest_sv', 'read_depth'], errors='ignore')
 
     logging.info('Columns list after preprocessing: %s', data.columns.tolist())
 
@@ -298,10 +282,13 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
     # If not 80/20 split, use XGBoost and Random Forest only (highest performing models) to save time.
     if split_80_20:
         pipelines = {
-            "Logistic_Regression": Pipeline([('classifier', LogisticRegression(max_iter=1000, random_state=42))]),
             "Random_Forest": Pipeline([('classifier', RandomForestClassifier(n_estimators=100, random_state=42))]),
-            "XGBoost": Pipeline([('classifier', XGBClassifier(n_estimators=100, eval_metric='logloss', random_state=42, enable_categorical=False))])
         }
+        # pipelines = {
+        #     "Logistic_Regression": Pipeline([('classifier', LogisticRegression(max_iter=1000, random_state=42))]),
+        #     "Random_Forest": Pipeline([('classifier', RandomForestClassifier(n_estimators=100, random_state=42))]),
+        #     "XGBoost": Pipeline([('classifier', XGBClassifier(n_estimators=100, eval_metric='logloss', random_state=42, enable_categorical=False))])
+        # }
     else:
         pipelines = {
             "Random_Forest": Pipeline([('classifier', RandomForestClassifier(n_estimators=100, random_state=42))]),
@@ -412,12 +399,6 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
             model_path = os.path.join(output_directory, model_name_fp + '_model.pkl')
             joblib.dump(best_model, model_path)
             logging.info('Saved the %s model to %s', model_name, model_path)
-            
-            # Save the TP scaler for use during prediction
-            # (Both TP and FP are scaled relative to TP distribution)
-            scaler_path = os.path.join(output_directory, 'scaler_tp.pkl')
-            joblib.dump(scaler_tp, scaler_path)
-            logging.info('Saved the TP scaler to %s (for prediction on both TP and FP)', scaler_path)
 
         logging.info('Completed training and evaluation for %s model.', model_name)
 
@@ -568,13 +549,6 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
                 except Exception as exc:
                     logging.warning('SHAP analysis failed for %s: %s. Continuing without SHAP outputs.', model_name, exc)
 
-        # Save the scaler for use during prediction if training the full model (not 80-20 split)
-        if not split_80_20:
-            scaler_path = os.path.join(output_directory, 'scaler_tp.pkl')
-            joblib.dump(scaler_tp, scaler_path)
-            logging.info('Saved the TP scaler to %s for predictions', scaler_path)
-
-
 if __name__ == '__main__':
     # Parse the command line arguments.
     import argparse
@@ -583,18 +557,27 @@ if __name__ == '__main__':
     parser.add_argument("--fp_hg002_grch37", required=True, help="Path to the false positive BED file for HG002 in GRCh37")
     parser.add_argument("--tp_visor_grch38", required=True, help="Path to the true positive BED file for Visor in GRCh38")
     parser.add_argument("--fp_visor_grch38", required=True, help="Path to the false positive BED file for Visor in GRCh38")
-    parser.add_argument("--tp_platinum_grch38", required=True, help="Path to the true positive BED file for Platinum in GRCh38")
-    parser.add_argument("--fp_platinum_grch38", required=True, help="Path to the false positive BED file for Platinum in GRCh38")
+    parser.add_argument("--tp_na12877_grch38", required=True, help="Path to the true positive BED file for NA12877 in GRCh38")
+    parser.add_argument("--fp_na12877_grch38", required=True, help="Path to the false positive BED file for NA12877 in GRCh38")
+    parser.add_argument("--tp_na12878_grch38", required=True, help="Path to the true positive BED file for NA12878 in GRCh38")
+    parser.add_argument("--fp_na12878_grch38", required=True, help="Path to the false positive BED file for NA12878 in GRCh38")
+    parser.add_argument("--tp_na12879_grch38", required=True, help="Path to the true positive BED file for NA12879 in GRCh38")
+    parser.add_argument("--fp_na12879_grch38", required=True, help="Path to the false positive BED file for NA12879 in GRCh38")
     parser.add_argument("--outdiranno", required=True, help="Output directory for saving the ANNOVAR annotations")
     parser.add_argument("--outdir", required=True, help="Output directory for saving the model")
     parser.add_argument("--annovar", required=True, help="Path to ANNOVAR")
     parser.add_argument("--annovar_db", required=True, help="Path to ANNOVAR database")
     parser.add_argument("--leave_out", required=True, help="Which dataset to leave out for training")
+    parser.add_argument("--sample_coverage_hg002", type=float, required=True, help="Mean read depth coverage for HG002 sample (required)")
+    parser.add_argument("--sample_coverage_visor", type=float, required=True, help="Mean read depth coverage for Visor sample (required)")
+    parser.add_argument("--sample_coverage_na12877", type=float, required=True, help="Mean read depth coverage for NA12877 sample (required)")
+    parser.add_argument("--sample_coverage_na12878", type=float, required=True, help="Mean read depth coverage for NA12878 sample (required)")
+    parser.add_argument("--sample_coverage_na12879", type=float, required=True, help="Mean read depth coverage for NA12879 sample (required)")
     parser.add_argument("--split_80_20", action='store_true', help="Whether to split the data into training and testing sets using an 80-20 split. If not specified, all the data will be used for training and testing, and cross-validation will be used to evaluate the model performance.")
     args = parser.parse_args()
 
     # Run the program.
     logging.info('Training the model, split_80_20 = %s.', args.split_80_20)
-    train(args.tp_hg002_grch37, args.fp_hg002_grch37, args.tp_visor_grch38, args.fp_visor_grch38, args.tp_platinum_grch38, args.fp_platinum_grch38, args.outdir, args.annovar, args.annovar_db, args.outdiranno, args.leave_out, args.split_80_20)
+    train(args.tp_hg002_grch37, args.fp_hg002_grch37, args.tp_visor_grch38, args.fp_visor_grch38, args.tp_na12877_grch38, args.fp_na12877_grch38, args.tp_na12878_grch38, args.fp_na12878_grch38, args.tp_na12879_grch38, args.fp_na12879_grch38, args.outdir, args.annovar, args.annovar_db, args.outdiranno, args.leave_out, args.split_80_20, args.sample_coverage_hg002, args.sample_coverage_visor, args.sample_coverage_na12877, args.sample_coverage_na12878, args.sample_coverage_na12879)
     logging.info('done.')
 

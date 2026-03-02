@@ -83,14 +83,14 @@ def create_bed(input_vcf, output_bed):
     bed_df.to_csv(output_bed, sep='\t', header=False, index=False)
     logging.info('Created BED file: %s', output_bed)
 
-def score(model, input_vcf, output_vcf, scaler_path=None, buildver='hg38', title='Probability Distribution', threshold=0.05):
+def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Distribution', threshold=0.05, sample_coverage=None):
     """Score the structural variants using the binary classification model.
 
     Args:
         model (str): Path to the model file.
         input_vcf (str): Path to the input VCF file.
         output_vcf (str): Path to the output VCF file.
-        scaler_path (str): Path to the scaler pkl file (optional).
+        sample_coverage (float): Required. Mean read depth coverage for the sample.
     """
     prob_threshold = threshold
     logging.info('Using probability threshold: %.3f', prob_threshold)
@@ -114,20 +114,7 @@ def score(model, input_vcf, output_vcf, scaler_path=None, buildver='hg38', title
         os.makedirs(anno_outdir)
         logging.info('Created output directory: %s', anno_outdir)
 
-    feature_df = extract_features(bed_file, annovar_path, annovar_db_path, anno_outdir, buildver)
-
-    # Perform robust scaling on the read_depth and cluster_size columns
-    logging.info('Performing robust scaling on the read_depth and cluster_size columns...')
-    if scaler_path is not None and os.path.isfile(scaler_path):
-        # Load the pre-fitted scaler from training
-        logging.info('Loading scaler from: %s', scaler_path)
-        scaler = joblib.load(scaler_path)
-        feature_df[['read_depth', 'cluster_size']] = scaler.transform(feature_df[['read_depth', 'cluster_size']])
-        logging.info('Applied pre-fitted scaler (trained on TP distribution).')
-    else:
-        # Exit with error, since the scaler is required for proper scaling of the features
-        logging.error('Scaler file is required for proper scaling of the features. Please provide a valid scaler file path using the --scaler argument.')
-        sys.exit(1)
+    feature_df = extract_features(bed_file, annovar_path, annovar_db_path, anno_outdir, buildver, sample_coverage=sample_coverage)
 
     # Check if the feature extraction was successful
     if feature_df.empty:
@@ -137,8 +124,9 @@ def score(model, input_vcf, output_vcf, scaler_path=None, buildver='hg38', title
     # Separate the ID, chrom, start, end, SV length, read depth, and cluster size columns from the features
     id_col = feature_df.pop('id')
     
-    # Remove other non-feature columns before prediction
-    for col in ['chrom', 'start', 'end', 'sv_type_str']:
+    # Remove other non-feature columns before prediction.
+    # Keep normalized *_per_kb features; remove raw versions.
+    for col in ['chrom', 'start', 'end', 'sv_type_str', 'cluster_size', 'dist_to_nearest_sv', 'read_depth']:
         if col in feature_df.columns:
             feature_df.pop(col)
     
@@ -234,8 +222,8 @@ if __name__ == '__main__':
                         help='Title for the probability distribution plot (default: Probability Distribution).')
     parser.add_argument('--threshold', type=float, default=0.05,
                         help='Threshold for filtering predictions (default: 0.05).')
-    parser.add_argument('--scaler', type=str, default=None,
-                        help='Path to the scaler pkl file (trained on TP data, optional).')
+    parser.add_argument('--sample_coverage', type=float, required=True,
+                        help='Mean read depth coverage for the sample (required, used to normalize read_depth).')
 
     args = parser.parse_args()
     input_vcf = args.input
@@ -249,7 +237,6 @@ if __name__ == '__main__':
     logging.info('Input VCF file: %s', input_vcf)
     logging.info('Output VCF file: %s', output_vcf)
     logging.info('Model file: %s', model)
-    logging.info('Scaler file: %s', args.scaler)
 
     # Check if the input VCF file exists
     if not os.path.isfile(input_vcf):
@@ -285,5 +272,5 @@ if __name__ == '__main__':
         sys.exit(1)
 
     # Run the scoring function
-    score(model, input_vcf, output_vcf, scaler_path=args.scaler, buildver=buildver, title=args.title, threshold=args.threshold)
+    score(model, input_vcf, output_vcf, buildver=buildver, title=args.title, threshold=args.threshold, sample_coverage=args.sample_coverage)
     logging.info('Scoring process completed.')
