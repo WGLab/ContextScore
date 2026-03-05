@@ -128,6 +128,14 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
     # Drop the original aln_type column.
     bed_df.drop(columns=['aln_type'], inplace=True)
 
+    # Create normalized cluster_size feature (cluster_size per 1000 bp of SV length)
+    # This prevents large sparse SVs from being unfairly penalized
+    bed_df['cluster_size_per_kb'] = np.where(
+        bed_df['sv_length'] > 0,
+        bed_df['cluster_size'] / (bed_df['sv_length'] / 1000.0),
+        0
+    )
+
     # Read depth normalized by sample coverage
     bed_df['read_depth_normalized'] = np.where(
         sample_coverage > 0,
@@ -240,6 +248,13 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
 
     # Print statistics about the distance to nearest SV feature.
     logging.info('Distance to nearest SV - mean: %.2f, median: %.2f, std: %.2f', bed_df['dist_to_nearest_sv'].mean(), bed_df['dist_to_nearest_sv'].median(), bed_df['dist_to_nearest_sv'].std())
+
+    # Normalize by SV size
+    bed_df['dist_nearest_sv_per_kb'] = np.where(
+        bed_df['sv_length'] > 0,
+        bed_df['dist_to_nearest_sv'] / (bed_df['sv_length'] / 1000.0),
+        bed_df['dist_to_nearest_sv']
+    )
 
     # Now drop sv_length since all normalizations are complete
     # bed_df.drop(columns=['sv_length'], inplace=True)

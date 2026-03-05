@@ -121,12 +121,22 @@ def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Dist
         logging.error('Feature extraction failed. No features extracted.')
         sys.exit(1)
 
-    # Separate the ID, chrom, start, end, SV length, read depth, and cluster size columns from the features
+    # Separate the ID column and keep variant metadata for downstream evaluation joins.
     id_col = feature_df.pop('id')
+
+    predictions_meta = pd.DataFrame({
+        'id': id_col.values,
+        'chrom': feature_df['chrom'].astype(str).values if 'chrom' in feature_df.columns else np.nan,
+        'start': pd.to_numeric(feature_df['start'], errors='coerce').astype('Int64').values if 'start' in feature_df.columns else pd.Series([pd.NA] * len(id_col), dtype='Int64').values,
+        'end': pd.to_numeric(feature_df['end'], errors='coerce').astype('Int64').values if 'end' in feature_df.columns else pd.Series([pd.NA] * len(id_col), dtype='Int64').values,
+        'sv_type_str': feature_df['sv_type_str'].astype(str).values if 'sv_type_str' in feature_df.columns else np.nan,
+        'sv_length': pd.to_numeric(feature_df['sv_length'], errors='coerce').astype('Int64').values if 'sv_length' in feature_df.columns else pd.Series([pd.NA] * len(id_col), dtype='Int64').values,
+    })
+    predictions_meta['sv_length_abs'] = predictions_meta['sv_length'].abs()
     
     # Remove other non-feature columns before prediction.
-    # Keep cluster_size and dist_to_nearest_sv; remove raw read_depth (keep read_depth_normalized).
-    for col in ['chrom', 'start', 'end', 'sv_type_str', 'read_depth']:
+    # Keep normalized *_per_kb features; remove raw versions.
+    for col in ['chrom', 'start', 'end', 'sv_type_str', 'cluster_size', 'dist_to_nearest_sv', 'read_depth']:
         if col in feature_df.columns:
             feature_df.pop(col)
     
@@ -152,8 +162,16 @@ def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Dist
     logging.info('Running the model on the features...')
     y_pred = clf.predict_proba(feature_df)
 
-    # Plot a histogram of the probabilities using seaborn since it looks better
     output_dir = os.path.dirname(output_vcf)
+
+    # Save per-variant probabilities for downstream threshold tuning.
+    predictions_tsv = os.path.join(output_dir, 'predictions.tsv')
+    predictions_df = predictions_meta.copy()
+    predictions_df['confidence_score'] = y_pred[:, 1]
+    predictions_df.to_csv(predictions_tsv, sep='\t', index=False)
+    logging.info('Saved per-variant predictions to %s', predictions_tsv)
+
+    # Plot a histogram of the probabilities using seaborn since it looks better
     fig, ax = plt.subplots()
     sns.histplot(y_pred[:, 1], bins=20, ax=ax)
     ax.set_xlabel('Confidence Score')

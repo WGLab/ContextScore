@@ -136,6 +136,64 @@ def impute_missing_values(tp_data, fp_data):
 
     return tp_data, fp_data
 
+
+def stratified_undersample_fp(fp_data, target_count, random_state=42):
+    """Undersample false positives using stratified sampling to preserve SV type and length distribution.
+    
+    Args:
+        fp_data (pd.DataFrame): False positive data to undersample.
+        target_count (int): Target number of samples to retain.
+        random_state (int): Random seed for reproducibility.
+    
+    Returns:
+        pd.DataFrame: Undersampled false positive data.
+    """
+    logging.info('Performing stratified undersampling of false positives (count = %d) to target (count = %d)', 
+                 fp_data.shape[0], target_count)
+    
+    # Create length bins for stratification
+    fp_data_temp = fp_data.copy()
+    fp_data_temp['length_bin'] = pd.cut(fp_data_temp['sv_length'], 
+                                         bins=[0, 1000, 10000, 100000, float('inf')],
+                                         labels=['<1kb', '1-10kb', '10-100kb', '>100kb'])
+    
+    # Create stratification column combining SV type and length bin
+    fp_data_temp['stratum'] = fp_data_temp['sv_type'].astype(str) + '_' + fp_data_temp['length_bin'].astype(str)
+    
+    # Calculate target sample size per stratum (proportional to original distribution)
+    stratum_counts = fp_data_temp['stratum'].value_counts()
+    stratum_fracs = stratum_counts / len(fp_data_temp)
+    
+    logging.info('Sampling from %d strata with proportional allocation', len(stratum_counts))
+    
+    # Sample from each stratum proportionally
+    sampled_dfs = []
+    for stratum, frac in stratum_fracs.items():
+        stratum_data = fp_data_temp[fp_data_temp['stratum'] == stratum]
+        n_samples = max(1, int(round(frac * target_count)))  # At least 1 sample per stratum
+        n_samples = min(n_samples, len(stratum_data))  # Can't sample more than available
+        sampled = stratum_data.sample(n=n_samples, random_state=random_state)
+        sampled_dfs.append(sampled)
+    
+    fp_data_balanced = pd.concat(sampled_dfs, ignore_index=True)
+    
+    # Drop temporary columns
+    fp_data_balanced = fp_data_balanced.drop(columns=['length_bin', 'stratum'])
+    
+    # If we're slightly off from target due to rounding, adjust by random sampling
+    if len(fp_data_balanced) > target_count:
+        fp_data_balanced = fp_data_balanced.sample(n=target_count, random_state=random_state)
+    elif len(fp_data_balanced) < target_count:
+        # Sample additional rows to reach target
+        n_additional = target_count - len(fp_data_balanced)
+        additional = fp_data.sample(n=n_additional, random_state=random_state+1)
+        fp_data_balanced = pd.concat([fp_data_balanced, additional], ignore_index=True)
+    
+    logging.info('Stratified undersampling complete. Final count: %d', len(fp_data_balanced))
+    
+    return fp_data_balanced
+
+
 def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp_na12877_grch38, fp_na12877_grch38, tp_na12878_grch38, fp_na12878_grch38, tp_na12879_grch38, fp_na12879_grch38, output_directory, annovar_path, db_path, outdiranno, leave_out="none", split_80_20=False, sample_coverage_hg002=None, sample_coverage_visor=None, sample_coverage_na12877=None, sample_coverage_na12878=None, sample_coverage_na12879=None):
     """Train the binary classification model.
     
@@ -238,30 +296,20 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
     logging.info('Number of true labels after impute+dropna: %d', tp_data.shape[0])
     logging.info('Number of false labels after impute+dropna: %d', fp_data.shape[0])
 
-    # Balance the dataset by undersampling the true positives.
-    # logging.info('Balancing the dataset by undersampling the true positives (count = %d) to match the false positives (count = %d)', tp_data.shape[0], fp_data.shape[0])
-    # tp_data = tp_data.sample(fp_data.shape[0], random_state=42)
-
-    # logging.info('Number of true labels after balancing: %d', tp_data.shape[0])
-    # logging.info('Number of false labels after balancing: %d', fp_data.shape[0])
+    # Instead of undersampling, use class_weight='balanced' in Random Forest
+    # to handle class imbalance while preserving all training data.
+    logging.info('Skipping undersampling - will use class_weight="balanced" instead')
+    logging.info('Final class counts - TP: %d, FP: %d', tp_data.shape[0], fp_data.shape[0])
 
     # Combine the true positive and false positive data.
     data = pd.concat([tp_data, fp_data], ignore_index=True)  # Ignore the index to realign the indices.
-
-    # Filter to keep only SVs with length <= 10kb for training
-    # (large SVs >10kb will always be kept in predictions)
-    logging.info('Filtering to keep only SVs with sv_length <= 10000 bp for training...')
-    data_before_size_filter = data.shape[0]
-    data = data[data['sv_length'] <= 10000]
-    data_after_size_filter = data.shape[0]
-    logging.info('Removed %d SVs with length > 10000 bp. Remaining training samples: %d', data_before_size_filter - data_after_size_filter, data_after_size_filter)
 
     # Pop the chrom column to use it later for cross-validation.
     chrom_col = data.pop('chrom')
 
     # Drop columns that are not needed for training.
-    # Keep cluster_size and dist_to_nearest_sv; remove raw read_depth (keep read_depth_normalized).
-    data = data.drop(columns=['start', 'end', 'sv_type_str', 'read_depth'], errors='ignore')
+    # Keep normalized *_per_kb features; remove raw versions.
+    data = data.drop(columns=['start', 'end', 'sv_type_str', 'cluster_size', 'dist_to_nearest_sv', 'read_depth'], errors='ignore')
 
     logging.info('Columns list after preprocessing: %s', data.columns.tolist())
 
@@ -290,7 +338,7 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
     # If not 80/20 split, use XGBoost and Random Forest only (highest performing models) to save time.
     if split_80_20:
         pipelines = {
-            "Random_Forest": Pipeline([('classifier', RandomForestClassifier(n_estimators=100, random_state=42))]),
+            "Random_Forest": Pipeline([('classifier', RandomForestClassifier(n_estimators=100, random_state=42, class_weight='balanced'))]),
         }
         # pipelines = {
         #     "Logistic_Regression": Pipeline([('classifier', LogisticRegression(max_iter=1000, random_state=42))]),
@@ -299,7 +347,7 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
         # }
     else:
         pipelines = {
-            "Random_Forest": Pipeline([('classifier', RandomForestClassifier(n_estimators=100, random_state=42))]),
+            "Random_Forest": Pipeline([('classifier', RandomForestClassifier(n_estimators=100, random_state=42, class_weight='balanced'))]),
         }
         # pipelines = {
         #     "Random_Forest": Pipeline([('classifier', RandomForestClassifier(n_estimators=100, random_state=42))]),
