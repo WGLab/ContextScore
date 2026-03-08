@@ -83,17 +83,33 @@ def create_bed(input_vcf, output_bed):
     bed_df.to_csv(output_bed, sep='\t', header=False, index=False)
     logging.info('Created BED file: %s', output_bed)
 
-def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Distribution', threshold=0.05, sample_coverage=None):
+def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Distribution', threshold=0.05, 
+          threshold_del=None, threshold_dup=None, threshold_ins=None, threshold_inv=None, sample_coverage=None):
     """Score the structural variants using the binary classification model.
 
     Args:
         model (str): Path to the model file.
         input_vcf (str): Path to the input VCF file.
         output_vcf (str): Path to the output VCF file.
+        threshold (float): Default threshold for SV types not specified.
+        threshold_del (float): Optional. Threshold for DEL variants. If None, uses default threshold.
+        threshold_dup (float): Optional. Threshold for DUP variants. If None, uses default threshold.
+        threshold_ins (float): Optional. Threshold for INS variants. If None, uses default threshold.
+        threshold_inv (float): Optional. Threshold for INV variants. If None, uses default threshold.
         sample_coverage (float): Required. Mean read depth coverage for the sample.
     """
+    # Build threshold dictionary with type-specific values
+    threshold_by_type = {
+        'DEL': threshold_del if threshold_del is not None else threshold,
+        'DUP': threshold_dup if threshold_dup is not None else threshold,
+        'INS': threshold_ins if threshold_ins is not None else threshold,
+        'INV': threshold_inv if threshold_inv is not None else threshold,
+    }
+    
     prob_threshold = threshold
-    logging.info('Using probability threshold: %.3f', prob_threshold)
+    logging.info('Using confidence threshold policy:')
+    for svtype, thr in sorted(threshold_by_type.items()):
+        logging.info('  %s: %.3f', svtype, thr)
 
     # Create a BED file from the input VCF file
     bed_file = os.path.splitext(input_vcf)[0] + '.bed'
@@ -181,27 +197,38 @@ def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Dist
     # Save the plot to the output directory
     plt.savefig(os.path.join(output_dir, 'probabilities_seaborn.png'))
     logging.info('Saved the plot of the probabilities to %s', os.path.join(output_dir, 'probabilities_seaborn.png'))
+    
+    # Build a lookup dictionary: variant_id → (confidence_score, sv_type) for type-specific filtering
+    variant_lookup = {}
+    for idx, row in predictions_df.iterrows():
+        variant_lookup[row['id']] = (row['confidence_score'], row['sv_type_str'])
+    
+    logging.info('Built variant lookup with %d entries for type-specific filtering', len(variant_lookup))
+    
+    # For backward compatibility, also track variants below the default threshold
     filtered_indices = np.where(y_pred[:, 1] < prob_threshold)[0]
-    logging.info('Number of variants under the probability threshold %.2f: %d', prob_threshold, len(filtered_indices))
+    logging.info('Number of variants under the default probability threshold %.2f: %d', prob_threshold, len(filtered_indices))
 
-    # Get the IDs of the filtered variants
+    # Get the IDs of the filtered variants (for logging/debugging)
     filtered_ids = id_col.iloc[filtered_indices].values
     filtered_ids_file = os.path.join(output_dir, 'filtered_ids.txt')
     np.savetxt(filtered_ids_file, filtered_ids, fmt='%s')
-    logging.info('Saved the filtered IDs to %s', filtered_ids_file)
+    logging.info('Saved the filtered IDs (using default threshold) to %s', filtered_ids_file)
 
     # Create a VCF file with only the filtered variants
     removed_svs_vcf = os.path.join(output_dir, 'removed_svs.vcf')
 
-    # Filter the input VCF file based on the filtered indices and SV length
-    # Keep all SVs >10kb regardless of confidence score; apply confidence threshold to SVs <=10kb
-    logging.info('Filtering the input VCF file based on the filtered indices and SV length...')
-    logging.info('Policy: Keep all SVs >10kb; apply confidence threshold (%.3f) to SVs <=10kb', prob_threshold)
-    filtered_records = set(filtered_ids)
+    # Filter the input VCF file based on type-specific thresholds and SV length
+    # Keep all SVs >50kb regardless of confidence score; apply type-specific threshold to SVs <=50kb
+    logging.info('Filtering the input VCF file using type-specific thresholds and SV length...')
+    logging.info('Policy: Keep all SVs >50kb; apply type-specific thresholds to SVs <=50kb')
+    
     current_record = 0
     pass_count = 0
     filter_count = 0
     total_records = 0
+    type_filter_stats = {}  # Track filtering statistics by type
+    
     with open(input_vcf, 'r') as vcf_in, open(output_vcf, 'w') as vcf_out, open(removed_svs_vcf, 'w') as removed_out:
         for line in vcf_in:
             if line.startswith('#'):
@@ -209,38 +236,72 @@ def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Dist
                 vcf_out.write(line)
                 removed_out.write(line)
             else:
-                # Extract SVLEN from the VCF INFO field
+                # Extract SVLEN and SVTYPE from the VCF INFO field
                 info_field = line.split('\t')[7]
                 svlen_match = None
+                svtype_match = None
+                
                 for field in info_field.split(';'):
                     if field.startswith('SVLEN='):
                         try:
                             svlen_match = int(field.split('=')[1])
                         except (ValueError, IndexError):
                             svlen_match = None
-                        break
+                    elif field.startswith('SVTYPE='):
+                        try:
+                            svtype_match = field.split('=')[1]
+                        except IndexError:
+                            svtype_match = None
+                
+                # Get confidence score and sv_type from predictions lookup
+                if current_record in variant_lookup:
+                    confidence_score, predicted_svtype = variant_lookup[current_record]
+                    # Use VCF SVTYPE if available, otherwise use predicted svtype
+                    svtype = svtype_match if svtype_match else predicted_svtype
+                else:
+                    # Variant not in predictions (shouldn't happen, but handle gracefully)
+                    logging.warning(f'Variant {current_record} not found in predictions lookup, using default threshold')
+                    confidence_score = 0.0
+                    svtype = svtype_match if svtype_match else 'UNKNOWN'
+                
+                # Get the appropriate threshold for this SV type
+                type_threshold = threshold_by_type.get(svtype, prob_threshold)
                 
                 # Determine if variant should be kept
-                is_large_sv = svlen_match is not None and abs(svlen_match) > 10000
-                is_below_threshold = current_record in filtered_records
+                is_large_sv = svlen_match is not None and abs(svlen_match) > 50000
+                passes_threshold = confidence_score >= type_threshold
                 
-                # Keep if: (large SV) OR (below confidence threshold)
-                # Note: is_below_threshold means confidence score < threshold, i.e., variant is confident/passing
-                if is_large_sv or not is_below_threshold:
-                    # Write the line if the current record is not in the filtered records OR if it's a large SV
+                # Keep if: (large SV) OR (passes type-specific threshold)
+                should_keep = is_large_sv or passes_threshold
+                
+                # Track statistics by type
+                if svtype not in type_filter_stats:
+                    type_filter_stats[svtype] = {'total': 0, 'kept': 0, 'filtered': 0}
+                type_filter_stats[svtype]['total'] += 1
+                
+                if should_keep:
                     vcf_out.write(line)
                     pass_count += 1
+                    type_filter_stats[svtype]['kept'] += 1
                 else:
-                    # Write the line to the removed_svs.vcf file if it's filtered by confidence threshold and <=10kb
+                    # Write the line to the removed_svs.vcf file if filtered
                     removed_out.write(line)
                     filter_count += 1
+                    type_filter_stats[svtype]['filtered'] += 1
 
                 total_records += 1
                 current_record += 1
 
     logging.info('Filtered the input VCF file and saved it to %s', output_vcf)
     logging.info('Scoring process completed successfully. Passed %d out of %d records.', pass_count, total_records)
-    logging.info('Removed %d records (low confidence and <=10kb). See %s for details.', filter_count, removed_svs_vcf)
+    logging.info('Removed %d records (low confidence and <=50kb). See %s for details.', filter_count, removed_svs_vcf)
+    
+    # Log filtering statistics by SV type
+    logging.info('Filtering statistics by SV type:')
+    for svtype in sorted(type_filter_stats.keys()):
+        stats = type_filter_stats[svtype]
+        kept_pct = 100.0 * stats['kept'] / stats['total'] if stats['total'] > 0 else 0
+        logging.info('  %s: kept %d/%d (%.1f%%)', svtype, stats['kept'], stats['total'], kept_pct)
 
 
 if __name__ == '__main__':
@@ -258,7 +319,15 @@ if __name__ == '__main__':
     parser.add_argument('--title', type=str, default='Probability Distribution',
                         help='Title for the probability distribution plot (default: Probability Distribution).')
     parser.add_argument('--threshold', type=float, default=0.05,
-                        help='Threshold for filtering predictions (default: 0.05).')
+                        help='Default threshold for filtering predictions (default: 0.05). Used for SV types without specific thresholds.')
+    parser.add_argument('--threshold-del', type=float, default=None,
+                        help='Threshold for DEL variants (default: uses --threshold value).')
+    parser.add_argument('--threshold-dup', type=float, default=None,
+                        help='Threshold for DUP variants (default: uses --threshold value).')
+    parser.add_argument('--threshold-ins', type=float, default=None,
+                        help='Threshold for INS variants (default: uses --threshold value).')
+    parser.add_argument('--threshold-inv', type=float, default=None,
+                        help='Threshold for INV variants (default: uses --threshold value).')
     parser.add_argument('--sample_coverage', type=float, required=True,
                         help='Mean read depth coverage for the sample (required, used to normalize read_depth).')
 
@@ -309,5 +378,8 @@ if __name__ == '__main__':
         sys.exit(1)
 
     # Run the scoring function
-    score(model, input_vcf, output_vcf, buildver=buildver, title=args.title, threshold=args.threshold, sample_coverage=args.sample_coverage)
+    score(model, input_vcf, output_vcf, buildver=buildver, title=args.title, 
+          threshold=args.threshold, sample_coverage=args.sample_coverage,
+          threshold_del=args.threshold_del, threshold_dup=args.threshold_dup,
+          threshold_ins=args.threshold_ins, threshold_inv=args.threshold_inv)
     logging.info('Scoring process completed.')
