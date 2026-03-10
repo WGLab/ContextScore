@@ -84,7 +84,7 @@ def create_bed(input_vcf, output_bed):
     logging.info('Created BED file: %s', output_bed)
 
 def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Distribution', threshold=0.05, 
-          threshold_del=None, threshold_dup=None, threshold_ins=None, threshold_inv=None, sample_coverage=None):
+          threshold_del=None, threshold_dup=None, threshold_ins=None, threshold_inv=None, sample_coverage=None, large_cutoff=10000):
     """Score the structural variants using the binary classification model.
 
     Args:
@@ -97,6 +97,7 @@ def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Dist
         threshold_ins (float): Optional. Threshold for INS variants. If None, uses default threshold.
         threshold_inv (float): Optional. Threshold for INV variants. If None, uses default threshold.
         sample_coverage (float): Required. Mean read depth coverage for the sample.
+        large_cutoff (int): SV size cutoff in bp; variants larger than this are always kept (default: 50000).
     """
     # Build threshold dictionary with type-specific values
     threshold_by_type = {
@@ -268,7 +269,7 @@ def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Dist
                 type_threshold = threshold_by_type.get(svtype, prob_threshold)
                 
                 # Determine if variant should be kept
-                is_large_sv = svlen_match is not None and abs(svlen_match) > 50000
+                is_large_sv = svlen_match is not None and abs(svlen_match) > large_cutoff
                 passes_threshold = confidence_score >= type_threshold
                 
                 # Keep if: (large SV) OR (passes type-specific threshold)
@@ -330,6 +331,8 @@ if __name__ == '__main__':
                         help='Threshold for INV variants (default: uses --threshold value).')
     parser.add_argument('--sample_coverage', type=float, required=True,
                         help='Mean read depth coverage for the sample (required, used to normalize read_depth).')
+    parser.add_argument('--large-cutoff', type=int, default=10000,
+                        help='SV size cutoff in bp; variants larger than this are always kept (default: 50000).')
 
     args = parser.parse_args()
     input_vcf = args.input
@@ -381,5 +384,6 @@ if __name__ == '__main__':
     score(model, input_vcf, output_vcf, buildver=buildver, title=args.title, 
           threshold=args.threshold, sample_coverage=args.sample_coverage,
           threshold_del=args.threshold_del, threshold_dup=args.threshold_dup,
-          threshold_ins=args.threshold_ins, threshold_inv=args.threshold_inv)
+          threshold_ins=args.threshold_ins, threshold_inv=args.threshold_inv,
+          large_cutoff=args.large_cutoff)
     logging.info('Scoring process completed.')
