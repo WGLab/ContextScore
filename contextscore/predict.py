@@ -15,6 +15,7 @@ import sys
 import logging
 import argparse
 import importlib
+import gzip
 import numpy as np
 import joblib
 import pandas as pd
@@ -75,6 +76,13 @@ def try_import_plotting_libs():
         return plt, sns
     except ImportError:
         return None, None
+
+
+def open_vcf_text(path):
+    """Open VCF text input, supporting both plain and gzipped files."""
+    if str(path).endswith('.gz'):
+        return gzip.open(path, 'rt', encoding='utf-8')
+    return open(path, 'r', encoding='utf-8')
 
 def create_bed(input_vcf, output_bed):
     """Create a BED file from the input VCF file. Extract the following fields:
@@ -288,7 +296,7 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
     total_records = 0
     type_filter_stats = {}  # Track filtering statistics by type
     
-    with open(input_vcf, 'r', encoding='utf-8') as vcf_in, open(output_vcf, 'w', encoding='utf-8') as vcf_out, open(removed_svs_vcf, 'w', encoding='utf-8') as removed_out:
+    with open_vcf_text(input_vcf) as vcf_in, open(output_vcf, 'w', encoding='utf-8') as vcf_out, open(removed_svs_vcf, 'w', encoding='utf-8') as removed_out:
         for line in vcf_in:
             if line.startswith('#'):
                 # Write the header lines as they are
