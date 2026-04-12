@@ -33,7 +33,9 @@ jobs:
           environment-file: environment.yml
           auto-activate-base: false
           use-mamba: true
-  
+          cache-environment: true      # ← caches the env
+          cache-downloads: true        # ← caches downloaded packages
+
       - name: Run tests
         shell: bash --login {0}
         run: |
