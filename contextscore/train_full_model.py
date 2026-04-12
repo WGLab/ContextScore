@@ -64,7 +64,10 @@ from sklearn.metrics import roc_curve, auc
 
 import matplotlib.pyplot as plt
 
-from extract_features import extract_features
+try:
+    from .extract_features import extract_features
+except ImportError:
+    from extract_features import extract_features
 
 # Set up the logger.
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

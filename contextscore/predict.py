@@ -13,14 +13,68 @@ Arguments:
 import os
 import sys
 import logging
+import argparse
+import importlib
 import numpy as np
 import joblib
 import pandas as pd
-import seaborn as sns
 
-import matplotlib.pyplot as plt
+try:
+    from .extract_features import extract_features
+except ImportError:
+    from extract_features import extract_features
 
-from extract_features import extract_features
+
+USER_PREFIX = "[ContextScore]"
+
+
+def user_message(message):
+    """Emit concise, user-facing progress messages."""
+    print(f"{USER_PREFIX} {message}")
+
+
+def configure_logging(verbose=False, debug=False):
+    """Configure logging output level based on user-selected mode."""
+    level = logging.DEBUG if debug else (logging.INFO if verbose else logging.WARNING)
+    logging.basicConfig(level=level, format='%(asctime)s - %(levelname)s - %(message)s')
+
+
+def resolve_annovar_paths(annovar_path, annovar_db_path):
+    """Resolve ANNOVAR paths from CLI flags or environment variables."""
+    resolved_path = annovar_path or os.getenv('ANNOVAR_PATH')
+    resolved_db = annovar_db_path or os.getenv('ANNOVAR_DB_PATH')
+    return resolved_path, resolved_db
+
+
+def validate_annovar_paths(annovar_path, annovar_db_path):
+    """Validate ANNOVAR installation paths before running feature extraction."""
+    if not annovar_path:
+        raise ValueError(
+            'ANNOVAR path is required. Set --annovar or environment variable ANNOVAR_PATH.'
+        )
+    if not annovar_db_path:
+        raise ValueError(
+            'ANNOVAR database path is required. Set --annovar-db or environment variable ANNOVAR_DB_PATH.'
+        )
+
+    annotate_variation = os.path.join(annovar_path, 'annotate_variation.pl')
+    table_annovar = os.path.join(annovar_path, 'table_annovar.pl')
+    if not os.path.isfile(annotate_variation) or not os.path.isfile(table_annovar):
+        raise ValueError(
+            f'Invalid ANNOVAR path: {annovar_path}. Expected annotate_variation.pl and table_annovar.pl in this directory.'
+        )
+    if not os.path.isdir(annovar_db_path):
+        raise ValueError(f'ANNOVAR database directory does not exist: {annovar_db_path}')
+
+
+def try_import_plotting_libs():
+    """Attempt to import plotting libraries without failing prediction flow."""
+    try:
+        plt = importlib.import_module('matplotlib.pyplot')
+        sns = importlib.import_module('seaborn')
+        return plt, sns
+    except ImportError:
+        return None, None
 
 def create_bed(input_vcf, output_bed):
     """Create a BED file from the input VCF file. Extract the following fields:
@@ -83,8 +137,10 @@ def create_bed(input_vcf, output_bed):
     bed_df.to_csv(output_bed, sep='\t', header=False, index=False)
     logging.info('Created BED file: %s', output_bed)
 
-def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Distribution', threshold=0.05, 
-          threshold_del=None, threshold_dup=None, threshold_ins=None, threshold_inv=None, sample_coverage=None, large_cutoff=10000):
+def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
+          threshold_del=None, threshold_dup=None, threshold_ins=None, threshold_inv=None,
+          sample_coverage=None, large_cutoff=10000, annovar_path=None, annovar_db_path=None,
+          debug_plot=False):
     """Score the structural variants using the binary classification model.
 
     Args:
@@ -122,9 +178,7 @@ def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Dist
     clf = joblib.load(model)
     logging.info('Model loaded successfully.')
 
-    # Extract the features from the BED file
-    annovar_path= '/mnt/isilon/wang_lab/perdomoj/softwares/annovar'
-    annovar_db_path= '/mnt/isilon/wang_lab/perdomoj/annovar/humandb'
+    # Extract the features from the BED file.
     anno_outdir= os.path.dirname(bed_file)
     anno_outdir= os.path.join(anno_outdir, 'annotations')
     if not os.path.exists(anno_outdir):
@@ -179,7 +233,7 @@ def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Dist
     logging.info('Running the model on the features...')
     y_pred = clf.predict_proba(feature_df)
 
-    output_dir = os.path.dirname(output_vcf)
+    output_dir = os.path.dirname(os.path.abspath(output_vcf)) or '.'
 
     # Save per-variant probabilities for downstream threshold tuning.
     predictions_tsv = os.path.join(output_dir, 'predictions.tsv')
@@ -188,20 +242,24 @@ def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Dist
     predictions_df.to_csv(predictions_tsv, sep='\t', index=False)
     logging.info('Saved per-variant predictions to %s', predictions_tsv)
 
-    # Plot a histogram of the probabilities using seaborn since it looks better
-    fig, ax = plt.subplots()
-    sns.histplot(y_pred[:, 1], bins=20, ax=ax)
-    ax.set_xlabel('Confidence Score')
-    ax.set_ylabel('Count')
-    ax.set_title(title)
+    if debug_plot:
+        plt, sns = try_import_plotting_libs()
+        if plt is None or sns is None:
+            logging.warning('Debug plotting requested but matplotlib/seaborn are not installed. Skipping plot generation.')
+        else:
+            _, ax = plt.subplots()
+            sns.histplot(y_pred[:, 1], bins=20, ax=ax)
+            ax.set_xlabel('Confidence Score')
+            ax.set_ylabel('Count')
+            ax.set_title('Probability Distribution')
+            plot_path = os.path.join(output_dir, 'probabilities_seaborn.png')
+            plt.savefig(plot_path)
+            plt.close()
+            logging.info('Saved debug probability plot to %s', plot_path)
 
-    # Save the plot to the output directory
-    plt.savefig(os.path.join(output_dir, 'probabilities_seaborn.png'))
-    logging.info('Saved the plot of the probabilities to %s', os.path.join(output_dir, 'probabilities_seaborn.png'))
-    
     # Build a lookup dictionary: variant_id → (confidence_score, sv_type) for type-specific filtering
     variant_lookup = {}
-    for idx, row in predictions_df.iterrows():
+    for _, row in predictions_df.iterrows():
         variant_lookup[row['id']] = (row['confidence_score'], row['sv_type_str'])
     
     logging.info('Built variant lookup with %d entries for type-specific filtering', len(variant_lookup))
@@ -230,7 +288,7 @@ def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Dist
     total_records = 0
     type_filter_stats = {}  # Track filtering statistics by type
     
-    with open(input_vcf, 'r') as vcf_in, open(output_vcf, 'w') as vcf_out, open(removed_svs_vcf, 'w') as removed_out:
+    with open(input_vcf, 'r', encoding='utf-8') as vcf_in, open(output_vcf, 'w', encoding='utf-8') as vcf_out, open(removed_svs_vcf, 'w', encoding='utf-8') as removed_out:
         for line in vcf_in:
             if line.startswith('#'):
                 # Write the header lines as they are
@@ -261,7 +319,7 @@ def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Dist
                     svtype = svtype_match if svtype_match else predicted_svtype
                 else:
                     # Variant not in predictions (shouldn't happen, but handle gracefully)
-                    logging.warning(f'Variant {current_record} not found in predictions lookup, using default threshold')
+                    logging.warning('Variant %d not found in predictions lookup, using default threshold', current_record)
                     confidence_score = 0.0
                     svtype = svtype_match if svtype_match else 'UNKNOWN'
                 
@@ -304,10 +362,17 @@ def score(model, input_vcf, output_vcf, buildver='hg38', title='Probability Dist
         kept_pct = 100.0 * stats['kept'] / stats['total'] if stats['total'] > 0 else 0
         logging.info('  %s: kept %d/%d (%.1f%%)', svtype, stats['kept'], stats['total'], kept_pct)
 
+    return {
+        'total_records': total_records,
+        'passed_records': pass_count,
+        'filtered_records': filter_count,
+        'output_vcf': output_vcf,
+        'removed_vcf': removed_svs_vcf,
+        'predictions_tsv': predictions_tsv,
+    }
 
-if __name__ == '__main__':
 
-    import argparse
+def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--input', type=str, required=True,
                         help='Path to the input VCF file.')
@@ -317,8 +382,6 @@ if __name__ == '__main__':
                         help='Path to the model file.')
     parser.add_argument('--buildver', type=str, default='hg38',
                         help='Genome build version (default: hg38).')
-    parser.add_argument('--title', type=str, default='Probability Distribution',
-                        help='Title for the probability distribution plot (default: Probability Distribution).')
     parser.add_argument('--threshold', type=float, default=0.05,
                         help='Default threshold for filtering predictions (default: 0.05). Used for SV types without specific thresholds.')
     parser.add_argument('--threshold-del', type=float, default=None,
@@ -333,19 +396,24 @@ if __name__ == '__main__':
                         help='Mean read depth coverage for the sample (required, used to normalize read_depth).')
     parser.add_argument('--large-cutoff', type=int, default=10000,
                         help='SV size cutoff in bp; variants larger than this are always kept (default: 50000).')
+    parser.add_argument('--annovar', type=str, default=None,
+                        help='Path to ANNOVAR installation directory. Can also be set via ANNOVAR_PATH.')
+    parser.add_argument('--annovar-db', type=str, default=None,
+                        help='Path to ANNOVAR database directory. Can also be set via ANNOVAR_DB_PATH.')
+    parser.add_argument('--verbose', action='store_true',
+                        help='Show detailed progress logs.')
+    parser.add_argument('--debug', action='store_true',
+                        help='Show debug logs including subprocess details.')
+    parser.add_argument('--debug-plot', action='store_true',
+                        help='Generate probability distribution plot for debugging (optional, requires matplotlib and seaborn).')
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     input_vcf = args.input
     output_vcf = args.output
     model = args.model
 
-    # Set up logging
-    logging.basicConfig(level=logging.INFO,
-                        format='%(asctime)s - %(levelname)s - %(message)s')
-    logging.info('Starting the scoring process...')
-    logging.info('Input VCF file: %s', input_vcf)
-    logging.info('Output VCF file: %s', output_vcf)
-    logging.info('Model file: %s', model)
+    configure_logging(verbose=args.verbose, debug=args.debug)
+    user_message('Starting prediction run')
 
     # Check if the input VCF file exists
     if not os.path.isfile(input_vcf):
@@ -358,7 +426,7 @@ if __name__ == '__main__':
         sys.exit(1)
 
     # Check if the output directory exists, if not create it
-    output_dir = os.path.dirname(output_vcf)
+    output_dir = os.path.dirname(os.path.abspath(output_vcf)) or '.'
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
         logging.info('Created output directory: %s', output_dir)
@@ -380,10 +448,33 @@ if __name__ == '__main__':
         logging.error('Unsupported genome build version: %s. Supported versions are hg19 and hg38.', buildver)
         sys.exit(1)
 
+    annovar_path, annovar_db_path = resolve_annovar_paths(args.annovar, args.annovar_db)
+    try:
+        validate_annovar_paths(annovar_path, annovar_db_path)
+    except ValueError as exc:
+        logging.error('%s', exc)
+        user_message('ANNOVAR setup is required before running prediction.')
+        user_message('Example: contextscore --input sample.vcf --output out.vcf --model model.pkl --sample_coverage 30 --annovar /path/to/annovar --annovar-db /path/to/humandb')
+        user_message('You can also set ANNOVAR_PATH and ANNOVAR_DB_PATH environment variables.')
+        sys.exit(2)
+
+    user_message('Running feature extraction and scoring')
+
     # Run the scoring function
-    score(model, input_vcf, output_vcf, buildver=buildver, title=args.title, 
-          threshold=args.threshold, sample_coverage=args.sample_coverage,
-          threshold_del=args.threshold_del, threshold_dup=args.threshold_dup,
-          threshold_ins=args.threshold_ins, threshold_inv=args.threshold_inv,
-          large_cutoff=args.large_cutoff)
+    summary = score(model, input_vcf, output_vcf, buildver=buildver,
+                    threshold=args.threshold, sample_coverage=args.sample_coverage,
+                    threshold_del=args.threshold_del, threshold_dup=args.threshold_dup,
+                    threshold_ins=args.threshold_ins, threshold_inv=args.threshold_inv,
+                    large_cutoff=args.large_cutoff, annovar_path=annovar_path,
+                    annovar_db_path=annovar_db_path,
+                    debug_plot=args.debug_plot)
+
+    user_message(
+        f"Completed. Kept {summary['passed_records']}/{summary['total_records']} variants; filtered {summary['filtered_records']}."
+    )
+    user_message(f"Output VCF: {summary['output_vcf']}")
     logging.info('Scoring process completed.')
+
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,37 @@
+{% set name = "contextscore" %}
+{% set version = "0.1.0" %}
+
+package:
+  name: {{ name|lower }}
+  version: {{ version }}
+
+source:
+  path: ..
+
+build:
+  number: 0
+  skip: true  # [win]
+  script: "{{ PYTHON }} -m pip install . --no-deps -vv"
+
+requirements:
+  host:
+    - python >=3.10,<3.11
+    - pip
+    - setuptools
+  run:
+    - python >=3.10,<3.11
+    - numpy
+    - pandas
+    - scikit-learn
+    - joblib
+    - bedtools
+
+about:
+  home: https://github.com/WGLab/ContextScore
+  summary: Assign confidence scores to structural variant datasets.
+  license: MIT
+  license_file: LICENSE
+
+extra:
+  recipe-maintainers:
+    - WGLab

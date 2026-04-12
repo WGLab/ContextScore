@@ -8,14 +8,17 @@ setup(
         "numpy",
         "pandas",
         "scikit-learn",
-        "matplotlib",
-        "seaborn",
+        "joblib",
     ],
+    extras_require={
+        "plot": [
+            "matplotlib",
+            "seaborn",
+        ]
+    },
     entry_points={
         "console_scripts": [
-            "annotate-svs=scripts.annotate_svs:main",
-            "train-model=scripts.train_model:main",
-            "predict=scripts.predict:main",
+            "contextscore=contextscore.predict:main",
         ]
     },
 )
