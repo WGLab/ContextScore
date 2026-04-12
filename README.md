@@ -1,6 +1,8 @@
 # ContextScore
 Assign confidence scores to SV datasets based on coverage, genomic context, and other important alignment features
 
+[![unit tests](https://github.com/WGLab/ContextScore/actions/workflows/predict-test.yml/badge.svg)](https://github.com/WGLab/ContextScore/actions/workflows/predict-test.yml)
+
 ## User Workflow
 
 ContextScore exposes a single user-facing command for prediction:
