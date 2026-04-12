@@ -35,9 +35,14 @@ Build steps:
 
 ```bash
 conda env create -f environment.yml
-conda activate contextscore-build
+conda activate contextscore
 conda build conda-recipe
 ```
+
+If resolving the environment is slow, try mamba:
+```bash
+conda install -n base -c conda-forge mamba
+
 
 Install locally built package:
 

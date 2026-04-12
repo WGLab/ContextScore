@@ -28,9 +28,11 @@ jobs:
       - name: Set up conda environment
         uses: conda-incubator/setup-miniconda@v2
         with:
+          miniforge-variant: Mambaforge   # uses mamba automatically
           activate-environment: contextscore
           environment-file: environment.yml
           auto-activate-base: false
+          use-mamba: true
   
       - name: Run tests
         shell: bash --login {0}
