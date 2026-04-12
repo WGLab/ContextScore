@@ -1,4 +1,4 @@
-name: contextscore-build
+name: contextscore
 channels:
   - conda-forge
   - bioconda
@@ -11,6 +11,5 @@ dependencies:
   - joblib
   - bedtools
   - setuptools
-  - pip
   - conda-build
   - pytest
