@@ -180,3 +180,4 @@ scripts/
 # Testing scripts
 linktoscripts
 truvari_results_Simulated_*/
+conda/contextscore-models/

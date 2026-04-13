@@ -26,26 +26,3 @@ export ANNOVAR_PATH=/path/to/annovar
 export ANNOVAR_DB_PATH=/path/to/humandb
 contextscore --input input.vcf --output scored.vcf --model full_model.pkl --sample_coverage 30
 ```
-
-## Conda Package Setup
-
-This repository includes a conda recipe at `conda-recipe/meta.yaml`.
-
-Build steps:
-
-```bash
-conda env create -f environment.yml
-conda activate contextscore
-conda build conda-recipe
-```
-
-If resolving the environment is slow, try mamba:
-```bash
-conda install -n base -c conda-forge mamba
-
-
-Install locally built package:
-
-```bash
-conda install --use-local contextscore
-```

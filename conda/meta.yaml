@@ -25,10 +25,15 @@ requirements:
     - scikit-learn
     - joblib
     - bedtools
+    - contextscore-models
 
 about:
   home: https://github.com/WGLab/ContextScore
   summary: Assign confidence scores to structural variant datasets.
+  description: |
+    ContextScore prediction package. Model weights are distributed separately
+    (for example via contextscore-models) and can be provided via --model or
+    CONTEXTSCORE_MODEL_PATH.
   license: MIT
   license_file: LICENSE
 

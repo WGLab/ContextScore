@@ -27,6 +27,14 @@ except ImportError:
 
 
 USER_PREFIX = "[ContextScore]"
+DEFAULT_MODEL_ENV_VAR = 'CONTEXTSCORE_MODEL_PATH'
+DEFAULT_MODEL_INSTALL_PATH = os.path.join(
+    sys.prefix,
+    'share',
+    'contextscore',
+    'models',
+    'contextscore_model.pkl',
+)
 
 
 def user_message(message):
@@ -45,6 +53,18 @@ def resolve_annovar_paths(annovar_path, annovar_db_path):
     resolved_path = annovar_path or os.getenv('ANNOVAR_PATH')
     resolved_db = annovar_db_path or os.getenv('ANNOVAR_DB_PATH')
     return resolved_path, resolved_db
+
+
+def resolve_model_path(model_path):
+    """Resolve model path from CLI, env var, or default installed location."""
+    if model_path:
+        return model_path, 'cli'
+
+    env_model_path = os.getenv(DEFAULT_MODEL_ENV_VAR)
+    if env_model_path:
+        return env_model_path, 'env'
+
+    return DEFAULT_MODEL_INSTALL_PATH, 'default'
 
 
 def validate_annovar_paths(annovar_path, annovar_db_path):
@@ -386,8 +406,8 @@ def main(argv=None):
                         help='Path to the input VCF file.')
     parser.add_argument('--output', type=str, required=True,
                         help='Path to the output VCF file.')
-    parser.add_argument('--model', type=str, required=True,
-                        help='Path to the model file.')
+    parser.add_argument('--model', type=str, required=False, default=None,
+                        help='Path to the model file. Optional if CONTEXTSCORE_MODEL_PATH is set or default packaged model is installed.')
     parser.add_argument('--buildver', type=str, default='hg38',
                         help='Genome build version (default: hg38).')
     parser.add_argument('--threshold', type=float, default=0.05,
@@ -418,7 +438,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     input_vcf = args.input
     output_vcf = args.output
-    model = args.model
+    model, model_source = resolve_model_path(args.model)
 
     configure_logging(verbose=args.verbose, debug=args.debug)
     user_message('Starting prediction run')
@@ -431,6 +451,10 @@ def main(argv=None):
     # Check if the model file exists
     if not os.path.isfile(model):
         logging.error('Model file does not exist: %s', model)
+        user_message('Model path could not be resolved to an existing file.')
+        user_message('Provide --model /path/to/model.pkl, or set CONTEXTSCORE_MODEL_PATH, or install the contextscore-models package.')
+        if model_source == 'default':
+            user_message(f'Default expected path: {DEFAULT_MODEL_INSTALL_PATH}')
         sys.exit(1)
 
     # Check if the output directory exists, if not create it
@@ -450,6 +474,8 @@ def main(argv=None):
         logging.error('Model file must have a .pkl extension: %s', model)
         sys.exit(1)
 
+    logging.info('Using model path from %s: %s', model_source, model)
+
     # Check the reference genome build version
     buildver = args.buildver
     if buildver not in ['hg19', 'hg38']:
@@ -462,7 +488,8 @@ def main(argv=None):
     except ValueError as exc:
         logging.error('%s', exc)
         user_message('ANNOVAR setup is required before running prediction.')
-        user_message('Example: contextscore --input sample.vcf --output out.vcf --model model.pkl --sample_coverage 30 --annovar /path/to/annovar --annovar-db /path/to/humandb')
+        user_message('Example: contextscore --input sample.vcf --output out.vcf --sample_coverage 30 --annovar /path/to/annovar --annovar-db /path/to/humandb')
+        user_message('Optional: add --model /path/to/model.pkl to override default model resolution.')
         user_message('You can also set ANNOVAR_PATH and ANNOVAR_DB_PATH environment variables.')
         sys.exit(2)
 

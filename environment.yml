@@ -12,4 +12,5 @@ dependencies:
   - bedtools
   - setuptools
   - conda-build
+  - anaconda-client
   - pytest
