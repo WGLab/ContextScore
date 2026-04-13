@@ -10,7 +10,3 @@ dependencies:
   - scikit-learn
   - joblib
   - bedtools
-  - setuptools
-  - conda-build
-  - anaconda-client
-  - pytest
