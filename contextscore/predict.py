@@ -16,6 +16,7 @@ import logging
 import argparse
 import importlib
 import gzip
+import re
 import numpy as np
 import joblib
 import pandas as pd
@@ -104,6 +105,44 @@ def open_vcf_text(path):
         return gzip.open(path, 'rt', encoding='utf-8')
     return open(path, 'r', encoding='utf-8')
 
+
+def canonicalize_chromosome(chrom_value):
+    """Map CHROM values to canonical chr-prefixed labels; return None if unparseable."""
+    if pd.isna(chrom_value):
+        return None
+
+    chrom_str = str(chrom_value).strip()
+    if not chrom_str:
+        return None
+
+    # Preserve already chr-prefixed labels (including alternate contigs).
+    if chrom_str.lower().startswith('chr'):
+        return chrom_str
+
+    match_chr = re.search(r'(^|[^A-Za-z0-9])chr([0-9]{1,2}|X|Y|M|MT)([^A-Za-z0-9]|$)', chrom_str, flags=re.IGNORECASE)
+    if match_chr:
+        token = match_chr.group(2)
+    else:
+        match_plain = re.search(r'(^|[^A-Za-z0-9])([0-9]{1,2}|X|Y|M|MT)([^A-Za-z0-9]|$)', chrom_str, flags=re.IGNORECASE)
+        if match_plain:
+            token = match_plain.group(2)
+        else:
+            # Keep common contig-like labels as-is (e.g., GL*, KI*, NC_*).
+            if re.fullmatch(r'[A-Za-z0-9_.-]+', chrom_str):
+                return chrom_str
+            return None
+
+    token_upper = token.upper()
+    if token_upper in {'M', 'MT'}:
+        return 'chrM'
+    if token_upper in {'X', 'Y'}:
+        return f'chr{token_upper}'
+    if token_upper.isdigit():
+        token_num = int(token_upper)
+        if 1 <= token_num <= 22:
+            return f'chr{token_num}'
+    return None
+
 def create_bed(input_vcf, output_bed):
     """Create a BED file from the input VCF file. Extract the following fields:
     1. Chromosome (CHROM)
@@ -130,6 +169,20 @@ def create_bed(input_vcf, output_bed):
     # Add a column for the ID field with the VCF row number
     vcf_df['id'] = vcf_df.index
     
+    # Normalize CHROM labels for robust annotation intersects.
+    vcf_df['CHROM_ORIG'] = vcf_df['CHROM'].astype(str)
+    vcf_df['CHROM'] = vcf_df['CHROM'].apply(canonicalize_chromosome)
+    invalid_chrom_mask = vcf_df['CHROM'].isna()
+    skipped_chrom_ids = set(vcf_df.loc[invalid_chrom_mask, 'id'].astype(int).tolist())
+    if skipped_chrom_ids:
+        examples = vcf_df.loc[invalid_chrom_mask, 'CHROM_ORIG'].dropna().astype(str).unique()[:5]
+        logging.warning(
+            'Skipping %d variants with unparseable CHROM labels during annotation/scoring. Examples: %s',
+            len(skipped_chrom_ids),
+            ', '.join(examples) if len(examples) > 0 else 'N/A',
+        )
+        vcf_df = vcf_df.loc[~invalid_chrom_mask].copy()
+
     info_df = pd.DataFrame()
     info_df['ALN'] = vcf_df['INFO'].str.extract(r'ALN=([^;]+)')
     info_df['END'] = vcf_df['INFO'].str.extract(r'END=(\d+)')
@@ -164,6 +217,7 @@ def create_bed(input_vcf, output_bed):
     # Save the BED file
     bed_df.to_csv(output_bed, sep='\t', header=False, index=False)
     logging.info('Created BED file: %s', output_bed)
+    return skipped_chrom_ids
 
 def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
           threshold_del=None, threshold_dup=None, threshold_ins=None, threshold_inv=None,
@@ -198,8 +252,10 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
 
     # Create a BED file from the input VCF file
     bed_file = os.path.splitext(input_vcf)[0] + '.bed'
-    create_bed(input_vcf, bed_file)
+    skipped_chrom_ids = create_bed(input_vcf, bed_file)
     logging.info('Created BED file: %s', bed_file)
+    if skipped_chrom_ids:
+        logging.info('Variants skipped from annotation/scoring due to unparseable CHROM: %d', len(skipped_chrom_ids))
 
     # Load the model
     logging.info('Loading model from: %s', model)
@@ -339,6 +395,18 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
                             svtype_match = field.split('=')[1]
                         except IndexError:
                             svtype_match = None
+
+                if current_record in skipped_chrom_ids:
+                    svtype_for_stats = svtype_match if svtype_match else 'UNKNOWN'
+                    if svtype_for_stats not in type_filter_stats:
+                        type_filter_stats[svtype_for_stats] = {'total': 0, 'kept': 0, 'filtered': 0}
+                    type_filter_stats[svtype_for_stats]['total'] += 1
+                    type_filter_stats[svtype_for_stats]['kept'] += 1
+                    vcf_out.write(line)
+                    pass_count += 1
+                    total_records += 1
+                    current_record += 1
+                    continue
                 
                 # Get confidence score and sv_type from predictions lookup
                 if current_record in variant_lookup:

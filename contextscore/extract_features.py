@@ -18,7 +18,11 @@ import heapq
 import numpy as np
 import pandas as pd
 import subprocess
+import tempfile
 from io import StringIO
+
+
+_BEDTOOLS_CHECKED = False
 
 
 def read_cytoband_file(cytoband_file):
@@ -272,12 +276,69 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
 
 def run_bedtools_intersect(input_bed, table_bed, training_format=False):
     """Run bedtools intersect to annotate the BED file."""
-    # Check if bedtools is installed.
-    try:
-        subprocess.run(["bedtools", "--version"], check=True)
-    except subprocess.CalledProcessError:
-        logging.error('bedtools is not installed. Please install bedtools.')
-        sys.exit(1)
+    def bed_uses_chr_prefix(path, sample_size=1000):
+        try:
+            sample_df = pd.read_csv(
+                path,
+                sep='\t',
+                header=None,
+                usecols=[0],
+                nrows=sample_size,
+                comment='#',
+                dtype=str,
+            )
+        except Exception:
+            return None
+
+        if sample_df.empty:
+            return None
+
+        chroms = sample_df.iloc[:, 0].dropna().astype(str).str.strip()
+        chroms = chroms[chroms != '']
+        if chroms.empty:
+            return None
+
+        return bool((chroms.str.lower().str.startswith('chr')).mean() >= 0.5)
+
+    def normalize_chrom_name(chrom, target_has_chr):
+        if pd.isna(chrom):
+            return chrom
+        chrom_str = str(chrom).strip()
+        if not chrom_str:
+            return chrom_str
+
+        has_chr = chrom_str.lower().startswith('chr')
+        if target_has_chr and not has_chr:
+            return f'chr{chrom_str}'
+        if not target_has_chr and has_chr:
+            return chrom_str[3:]
+        return chrom_str
+
+    def write_normalized_bed(path, target_has_chr):
+        bed_df = pd.read_csv(path, sep='\t', header=None, comment='#', dtype=str)
+        bed_df.iloc[:, 0] = bed_df.iloc[:, 0].apply(lambda c: normalize_chrom_name(c, target_has_chr))
+
+        with tempfile.NamedTemporaryFile(
+            mode='w',
+            suffix='.bed',
+            prefix='contextscore_normalized_',
+            delete=False,
+            encoding='utf-8',
+        ) as tmp_file:
+            temp_path = tmp_file.name
+
+        bed_df.to_csv(temp_path, sep='\t', header=False, index=False)
+        return temp_path
+
+    # Check if bedtools is installed (once per process).
+    global _BEDTOOLS_CHECKED
+    if not _BEDTOOLS_CHECKED:
+        try:
+            subprocess.run(["bedtools", "--version"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            _BEDTOOLS_CHECKED = True
+        except subprocess.CalledProcessError:
+            logging.error('bedtools is not installed. Please install bedtools.')
+            sys.exit(1)
 
     # Check if the input BED file exists.
     if not os.path.exists(input_bed):
@@ -289,10 +350,27 @@ def run_bedtools_intersect(input_bed, table_bed, training_format=False):
         logging.error('Table BED file does not exist: %s', table_bed)
         sys.exit(1)
 
+    intersect_input_bed = input_bed
+    normalized_temp_bed = None
+    try:
+        input_has_chr = bed_uses_chr_prefix(input_bed)
+        table_has_chr = bed_uses_chr_prefix(table_bed)
+        if input_has_chr is not None and table_has_chr is not None and input_has_chr != table_has_chr:
+            normalized_temp_bed = write_normalized_bed(input_bed, table_has_chr)
+            intersect_input_bed = normalized_temp_bed
+            logging.info(
+                'Normalized chromosome naming for bedtools intersect: %s -> %s prefix.',
+                'chr' if input_has_chr else 'no-chr',
+                'chr' if table_has_chr else 'no-chr',
+            )
+    except Exception as exc:
+        logging.warning('Could not normalize chromosome naming before bedtools intersect: %s', exc)
+        intersect_input_bed = input_bed
+
     # Run bedtools intersect to annotate the BED file.
     cmd = [
         "bedtools", "intersect",
-        "-a", input_bed,
+        "-a", intersect_input_bed,
         "-b", table_bed,
         "-wa", "-wb"
     ]
@@ -327,6 +405,12 @@ def run_bedtools_intersect(input_bed, table_bed, training_format=False):
         logging.error('Error annotating the BED file: %s', e)
         logging.error('Please check the input and table BED files.')
         sys.exit(1)
+    finally:
+        if normalized_temp_bed and os.path.exists(normalized_temp_bed):
+            try:
+                os.remove(normalized_temp_bed)
+            except OSError:
+                logging.warning('Could not remove temporary normalized BED file: %s', normalized_temp_bed)
 
 
     # Post-processing the features:
