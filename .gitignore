@@ -181,3 +181,7 @@ scripts/
 linktoscripts
 truvari_results_Simulated_*/
 conda/contextscore-models/
+tests/fixtures/output.vcf.avinput
+tests/fixtures/output.vcf.bed
+tests/fixtures/annotations/features.tsv
+tests/fixtures/annotations/regions.hg38_multianno.txt

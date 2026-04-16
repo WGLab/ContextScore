@@ -102,12 +102,13 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
         logging.info('Prediction format detected.')
 
     # Read in the BED file.
+    # Prediction BED files are written without a header row.
     if training_format:
-        bed_df = pd.read_csv(input_bed, sep='\t', header=0, usecols=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+        bed_df = pd.read_csv(input_bed, sep='\t', header=None, usecols=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
                          names=['chrom', 'start', 'end', 'sv_type', 'sv_length', 'genotype', 'read_depth', 'hmm_llh', 'aln_type', 'cluster_size', 'cn_state', 'aln_offset'],
                             dtype={'chrom': str, 'start': np.int32, 'end': np.int32, 'sv_type': str, 'sv_length': np.int32, 'genotype': str, 'read_depth': np.int32, 'hmm_llh': np.float32, 'aln_type': str, 'cluster_size': np.int32, 'cn_state': np.int32, 'aln_offset': np.int32})
     else:
-        bed_df = pd.read_csv(input_bed, sep='\t', header=0, usecols=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        bed_df = pd.read_csv(input_bed, sep='\t', header=None, usecols=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
                          names=['chrom', 'start', 'end', 'sv_type', 'sv_length', 'genotype', 'read_depth', 'hmm_llh', 'aln_type', 'cluster_size', 'cn_state', 'aln_offset', 'id'],
                          dtype={'chrom': str, 'start': np.int32, 'end': np.int32, 'sv_type': str, 'sv_length': np.int32, 'genotype': str, 'read_depth': np.int32, 'hmm_llh': np.float32, 'aln_type': str, 'cluster_size': np.int32, 'cn_state': np.int32, 'aln_offset': np.int32, 'id': np.int32})
 
@@ -376,7 +377,14 @@ def run_bedtools_intersect(input_bed, table_bed, training_format=False):
     ]
     logging.info('Running the command to annotate the BED file: %s', " ".join(cmd))
     try:
-        result = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, text=True)
+        result = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if result.stderr:
+            stderr_text = result.stderr.strip()
+            if 'inconsistent naming convention' in stderr_text:
+                logging.info('bedtools reported chromosome naming convention warnings; continuing.')
+                logging.debug('bedtools stderr: %s', stderr_text)
+            else:
+                logging.warning('bedtools stderr: %s', stderr_text)
 
         # Parse the output of bedtools intersect into a pandas DataFrame.
         logging.info('Parsing the output of bedtools intersect.')
@@ -403,6 +411,8 @@ def run_bedtools_intersect(input_bed, table_bed, training_format=False):
 
     except subprocess.CalledProcessError as e:
         logging.error('Error annotating the BED file: %s', e)
+        if e.stderr:
+            logging.error('bedtools stderr: %s', e.stderr.strip())
         logging.error('Please check the input and table BED files.')
         sys.exit(1)
     finally:
@@ -425,8 +435,8 @@ def bed_to_annovar_input(bed_file):
     output_file = bed_file.replace('.bed', '.avinput')
     logging.info('Converting the BED file to ANNOVAR input format.')
 
-    # Read the BED file using pandas (first line is the header with the column names).
-    df = pd.read_csv(bed_file, sep='\t', usecols=[0, 1, 2],
+    # Read the BED file using pandas. ContextScore BED files are headerless.
+    df = pd.read_csv(bed_file, sep='\t', header=None, usecols=[0, 1, 2],
                      names=["CHROM", "POS", "END"],
                      dtype={'CHROM': str, 'POS': np.int32, 'END': np.int32})
     

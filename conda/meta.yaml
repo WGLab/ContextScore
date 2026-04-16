@@ -15,14 +15,14 @@ build:
 
 requirements:
   host:
-    - python >=3.10,<3.14
+    - python >=3.10,<3.11
     - pip
     - setuptools
   run:
-    - python >=3.10,<3.14
+    - python >=3.10,<3.11
     - numpy
     - pandas
-    - scikit-learn
+    - scikit-learn =1.6.1  # For consistency with model training environment
     - joblib
     - bedtools
     - contextscore-models

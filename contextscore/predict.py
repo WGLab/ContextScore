@@ -115,24 +115,10 @@ def canonicalize_chromosome(chrom_value):
     if not chrom_str:
         return None
 
-    # Preserve already chr-prefixed labels (including alternate contigs).
-    if chrom_str.lower().startswith('chr'):
-        return chrom_str
-
-    match_chr = re.search(r'(^|[^A-Za-z0-9])chr([0-9]{1,2}|X|Y|M|MT)([^A-Za-z0-9]|$)', chrom_str, flags=re.IGNORECASE)
-    if match_chr:
-        token = match_chr.group(2)
-    else:
-        match_plain = re.search(r'(^|[^A-Za-z0-9])([0-9]{1,2}|X|Y|M|MT)([^A-Za-z0-9]|$)', chrom_str, flags=re.IGNORECASE)
-        if match_plain:
-            token = match_plain.group(2)
-        else:
-            # Keep common contig-like labels as-is (e.g., GL*, KI*, NC_*).
-            if re.fullmatch(r'[A-Za-z0-9_.-]+', chrom_str):
-                return chrom_str
-            return None
-
+    has_chr_prefix = chrom_str.lower().startswith('chr')
+    token = chrom_str[3:] if has_chr_prefix else chrom_str
     token_upper = token.upper()
+
     if token_upper in {'M', 'MT'}:
         return 'chrM'
     if token_upper in {'X', 'Y'}:
@@ -141,6 +127,10 @@ def canonicalize_chromosome(chrom_value):
         token_num = int(token_upper)
         if 1 <= token_num <= 22:
             return f'chr{token_num}'
+
+    # Keep non-canonical contigs as-is (e.g., GL*, KI*, NC_*).
+    if re.fullmatch(r'[A-Za-z0-9_.-]+', chrom_str):
+        return chrom_str
     return None
 
 def create_bed(input_vcf, output_bed):
@@ -299,7 +289,7 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
     logging.info('Handling NaN values in features...')
     nan_count_before = feature_df.isna().sum().sum()
     if nan_count_before > 0:
-        logging.warning('Found %d NaN values in prediction features. Filling with 0.', nan_count_before)
+        logging.info('Found %d NaN values in prediction features. Filling with 0.', nan_count_before)
         feature_df = feature_df.fillna(0)
     
     # Convert categorical/object columns to numeric (matching training preprocessing)
@@ -478,8 +468,8 @@ def main(argv=None):
                         help='Path to the model file. Optional if CONTEXTSCORE_MODEL_PATH is set or default packaged model is installed.')
     parser.add_argument('--buildver', type=str, default='hg38',
                         help='Genome build version (default: hg38).')
-    parser.add_argument('--threshold', type=float, default=0.05,
-                        help='Default threshold for filtering predictions (default: 0.05). Used for SV types without specific thresholds.')
+    parser.add_argument('--threshold', type=float, default=0.2,
+                        help='Default threshold for filtering predictions (default: 0.2). Used for SV types without specific thresholds.')
     parser.add_argument('--threshold-del', type=float, default=None,
                         help='Threshold for DEL variants (default: uses --threshold value).')
     parser.add_argument('--threshold-dup', type=float, default=None,
@@ -488,7 +478,7 @@ def main(argv=None):
                         help='Threshold for INS variants (default: uses --threshold value).')
     parser.add_argument('--threshold-inv', type=float, default=None,
                         help='Threshold for INV variants (default: uses --threshold value).')
-    parser.add_argument('--sample_coverage', type=float, required=True,
+    parser.add_argument('--sample-coverage', type=float, required=True,
                         help='Mean read depth coverage for the sample (required, used to normalize read_depth).')
     parser.add_argument('--large-cutoff', type=int, default=10000,
                         help='SV size cutoff in bp; variants larger than this are always kept (default: 50000).')
