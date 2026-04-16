@@ -1,28 +1,6 @@
 """
 train_model.py - Train the binary classification model.
 
-This script trains the binary classification model using the true positive and
-false positive data. The true positive data is obtained from a benchmarking
-dataset. The false positive data is obtained from running the caller on data
-that is known to be negative for SVs. This data can be obtained by running the
-caller on a normal sample with known SVs accounted for in the reference genome.
-
-For example for HG002, the true positive data is obtained from the Genome in a
-Bottle benchmarking dataset, and the false positive data is obtained from
-running the caller on the HG002 normal sample and extracting the SV calls that
-are not in the benchmarking dataset. This can be repeated for other samples such
-as HG001 and HG005 as long as the known SVs are accounted for.
-
-In the HG002 SV v0.6 dataset, there are low-confidence regions which
-are excluded from the true positive data. Thus, we must include true SVs from
-other publicly available normal samples with information from complex regions,
-such as those aligned to CHM13. 
-
-The model is trained using logistic regression. The features are the LRR and
-BAF values. The labels are 1 for true positives and 0 for false positives.
-
-The model is saved to the output directory as a pickle file.
-
 Usage:
     python train_model.py <true_positives_filepath> <false_positives_filepath>
     <output_directory>
@@ -63,6 +41,7 @@ import shap
 from sklearn.metrics import roc_curve, auc
 
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 try:
     from .extract_features import extract_features
@@ -71,6 +50,38 @@ except ImportError:
 
 # Set up the logger.
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Manuscript-friendly display labels for model features.
+FEATURE_DISPLAY_NAMES = {
+    'dist_nearest_sv_per_kb': 'Nearest SV distance / kb',
+    'cluster_size_per_kb': 'Cluster size / kb',
+    'sv_length': 'SV length (bp)',
+    'read_depth_normalized': 'Normalized depth',
+    'segdup_left': 'SegDup overlap (left)',
+    'segdup_right': 'SegDup overlap (right)',
+    'dist_to_telomere': 'Telomere distance',
+    'dist_to_centromere': 'Centromere distance',
+    'call_type': 'Call evidence type',
+    'simpleRepeat_left': 'Simple repeat (left)',
+    'simpleRepeat_right': 'Simple repeat (right)',
+    'sv_type': 'SV type',
+    'repeat_span_density': 'Repeat span density',
+    'fragile_site': 'Fragile-site overlap',
+    'phastCons': 'phastCons score',
+    'hmm_llh': 'HMM log-likelihood',
+    'aln_offset': 'Alignment offset'
+}
+
+ENABLE_SHAP = False
+
+def get_display_feature_name(feature_name):
+    """Map internal feature keys to human-readable labels for plots/tables."""
+    return FEATURE_DISPLAY_NAMES.get(feature_name, feature_name.replace('_', ' '))
+
+
+def get_display_feature_names(feature_names):
+    """Return human-readable labels in the same order as input feature names."""
+    return [get_display_feature_name(name) for name in feature_names]
 
 def balance_tp_fp_datasets(tp_data, fp_data):
     """Balance the true positive and false positive datasets by undersampling the lower-count class."""
@@ -197,7 +208,7 @@ def stratified_undersample_fp(fp_data, target_count, random_state=42):
     return fp_data_balanced
 
 
-def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp_na12877_grch38, fp_na12877_grch38, tp_na12878_grch38, fp_na12878_grch38, tp_na12879_grch38, fp_na12879_grch38, output_directory, annovar_path, db_path, outdiranno, leave_out="none", split_80_20=False, sample_coverage_hg002=None, sample_coverage_visor=None, sample_coverage_na12877=None, sample_coverage_na12878=None, sample_coverage_na12879=None):
+def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp_na12877_grch38, fp_na12877_grch38, tp_na12878_grch38, fp_na12878_grch38, tp_na12879_grch38, fp_na12879_grch38, output_directory, annovar_path, db_path, outdiranno, leave_out="none", split_80_20=False, per_chr_validation=False, sample_coverage_hg002=None, sample_coverage_visor=None, sample_coverage_na12877=None, sample_coverage_na12878=None, sample_coverage_na12879=None):
     """Train the binary classification model.
     
     Args:
@@ -341,8 +352,12 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
     # If not 80/20 split, use XGBoost and Random Forest only (highest performing models) to save time.
     if split_80_20:
         pipelines = {
-            "Random_Forest": Pipeline([('classifier', RandomForestClassifier(n_estimators=100, random_state=42, class_weight='balanced'))]),
+            "Random_Forest": Pipeline([('classifier', RandomForestClassifier(n_estimators=100, random_state=42))]),
+            "XGBoost": Pipeline([('classifier', XGBClassifier(n_estimators=100, eval_metric='logloss', random_state=42, enable_categorical=False))])
         }
+        # pipelines = {
+        #     "Random_Forest": Pipeline([('classifier', RandomForestClassifier(n_estimators=100, random_state=42, class_weight='balanced'))]),
+        # }
         # pipelines = {
         #     "Logistic_Regression": Pipeline([('classifier', LogisticRegression(max_iter=1000, random_state=42))]),
         #     "Random_Forest": Pipeline([('classifier', RandomForestClassifier(n_estimators=100, random_state=42))]),
@@ -377,236 +392,375 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
         }
     }
 
-    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-    for model_name, pipeline in pipelines.items():
-        logging.info('Training model class %s', model_name)
-        model_name_fp = "contextscore_" + model_name.lower() + "_leaveout_" + leave_out
+    if per_chr_validation:
+        # ======================================================
+        # Evaluate the model using per-chromosome cross-validation, but don't save.
+        # ======================================================
+        logging.info('Evaluating the model using per-chromosome cross-validation.')
 
-        if split_80_20:
-            model_name_fp += "_80_20_split"
+        # 4 August 2025: Remove chrY from the analysis. More than half is missing in
+        # GRCh38 and leads to high false positive rates.
+        chromosomes = ['chr1', 'chr2', 'chr3', 'chr4', 'chr5', 'chr6', 'chr7', 'chr8', 'chr9', 'chr10',
+                    'chr11', 'chr12', 'chr13', 'chr14', 'chr15', 'chr16', 'chr17', 'chr18', 'chr19', 'chr20', 'chr21', 'chr22', 'chrX']
 
-        # Perform grid search to find the best hyperparameters for the model, optimizing for precision to prioritize reducing false positives.
-        # Convert categorical columns to numeric
-        X_train_processed = X_train.copy()
-        for col in X_train_processed.columns:
-            if X_train_processed[col].dtype == 'category':
-                X_train_processed[col] = X_train_processed[col].cat.codes
-            elif X_train_processed[col].dtype == 'object':
-                X_train_processed[col] = pd.to_numeric(X_train_processed[col], errors='coerce')
+        logging.info('Chromosomes: %s', chromosomes)
+        f1_scores = {}
+        precision_scores = {}
+        recall_scores = {}
+        for model_name, pipeline in pipelines.items():
+            model = pipeline.named_steps['classifier']
 
-        X_train_processed = X_train_processed.fillna(0).astype('float64')
+            # Dictionary with number of SVs in the training set for each chromosome.
+            sv_counts = {chrom: features[chrom_col == chrom].shape[0] for chrom in chromosomes}
+            logging.info('Number of SVs in the training set for each chromosome: %s', sv_counts)
 
-        grid_search = GridSearchCV(estimator=pipeline, param_grid=param_grids[model_name], cv=cv, scoring='precision', n_jobs=-1)
-        grid_search.fit(X_train_processed, y_train)
-        logging.info('Best hyperparameters for %s: %s', model_name, grid_search.best_params_)
+            for chrom in chromosomes:
+                logging.info('Training the %s model on chromosome %s.', model_name, chrom)
 
-        # Get predicted probabilities for the training and testing sets.
-        best_model = grid_search.best_estimator_
+                # Split the data into training and testing sets by chromosome.
+                X_train_chrom = features[chrom_col != chrom].copy()
+                y_train_chrom = labels[chrom_col != chrom].copy()
+                X_test_chrom = features[chrom_col == chrom].copy()
+                y_test_chrom = labels[chrom_col == chrom].copy()
 
-        # Save plots only for 80-20 split since the ROC curve will be overly optimistic when using all the data for training and testing.
-        if split_80_20:
-            y_train_prob = best_model.predict_proba(X_train)[:, 1]
-            y_test_prob = best_model.predict_proba(X_test)[:, 1]
+                # Drop the chromosome column from the features.
+                # X_train_chrom.drop(columns=['chrom'], inplace=True)
+                # X_test_chrom.drop(columns=['chrom'], inplace=True)
 
-            # Compute the ROC curve and ROC area for the training set.
-            fpr_train, tpr_train, _ = roc_curve(y_train, y_train_prob)
-            roc_auc_train = auc(fpr_train, tpr_train)
+                logging.info('Training set size: %d, Testing set size: %d',
+                            X_train_chrom.shape[0], X_test_chrom.shape[0])
+                # Train the model.
+                model.fit(X_train_chrom, y_train_chrom)
+                # Get the predicted probabilities for the testing set.
+                y_test_chrom_prob = model.predict_proba(X_test_chrom)[:, 1]
+                # Compute the ROC curve and ROC area for the testing set.
+                fpr_chrom, tpr_chrom, _ = roc_curve(y_test_chrom, y_test_chrom_prob)
+                roc_auc_chrom = auc(fpr_chrom, tpr_chrom)
+                logging.info('ROC AUC score for the %s model on chromosome %s: %f', model_name, chrom, roc_auc_chrom)
 
-            # Compute the ROC curve and ROC area for the testing set.
-            fpr_test, tpr_test, thresholds = roc_curve(y_test, y_test_prob)
-            roc_auc_test = auc(fpr_test, tpr_test)
+                # Compute the F1 score for the testing set.
+                from sklearn.metrics import f1_score
+                y_test_chrom_pred = (y_test_chrom_prob >= 0.5).astype(int)  # Use a threshold of 0.5 for classification.
+                f1 = f1_score(y_test_chrom, y_test_chrom_pred)
+                f1_scores[(model_name, chrom)] = f1
+                logging.info('F1 score for the %s model on chromosome %s: %f', model_name, chrom, f1)
 
-            # Print the ROC AUC scores.
-            logging.info('ROC AUC score for the training set: %f', roc_auc_train)
-            logging.info('ROC AUC score for the testing set: %f', roc_auc_test)
+                # Compute precision and recall for the testing set.
+                from sklearn.metrics import precision_score, recall_score
+                precision = precision_score(y_test_chrom, y_test_chrom_pred)
+                recall = recall_score(y_test_chrom, y_test_chrom_pred)
+                precision_scores[(model_name, chrom)] = precision
+                recall_scores[(model_name, chrom)] = recall
+                logging.info('Precision for the %s model on chromosome %s: %f', model_name, chrom, precision)
+                logging.info('Recall for the %s model on chromosome %s: %f', model_name, chrom, recall)
+                
+        logging.info('Cross-validation analysis completed. F1 scores: %s', f1_scores)
 
-            # Plot the ROC curve for the training set.
-            plt.figure()
-            plt.plot(fpr_train, tpr_train, color='blue', lw=2, label='ROC curve (area = %0.3f)' % roc_auc_train)
-            # plt.plot(fpr, tpr, color='darkorange', lw=2, label='ROC curve (area = %0.2f)' % roc_auc)
-            plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
-            plt.xlim([0.0, 1.0])
-            plt.ylim([0.0, 1.05])
-            plt.xlabel('False Positive Rate')
-            plt.ylabel('True Positive Rate')
-            model_name_label = model_name.replace("_", " ")
-            plt.title('{} Receiver Operating Characteristic (Training Set)'.format(model_name_label))
-            plt.legend(loc='lower right')
-            # Save the plot to the output directory.
-            roc_plot_path = os.path.join(output_directory, model_name_fp + '_roc_curve.png')
-            plt.savefig(roc_plot_path)
-            plt.close()
-            logging.info('Saved the ROC curve to %s', roc_plot_path)
+        # Plot the F1 scores for each model and chromosome (one plot per model).
+        logging.info('Plotting the scores for each model and chromosome.')
+        metrics = ['F1 Score', 'Precision', 'Recall']
+        for model_name in pipelines.keys():
 
-            # Plot the ROC curve for the testing set.
-            plt.figure()
-            plt.plot(fpr_test, tpr_test, color='blue', lw=2, label='ROC curve (area = %0.3f)' % roc_auc_test)
-            plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
-            plt.xlim([0.0, 1.0])
-            plt.ylim([0.0, 1.05])
-            plt.xlabel('False Positive Rate')
-            plt.ylabel('True Positive Rate')
-            plt.title('{} Receiver Operating Characteristic (Testing Set)'.format(model_name_label))
-            plt.legend(loc='lower right')
-            # Save the plot to the output directory.
-            roc_plot_path = os.path.join(output_directory, model_name + '_roc_curve_test.png')
-            plt.savefig(roc_plot_path)
-            plt.close()
-            logging.info('Saved the ROC curve to %s', roc_plot_path)
-        else:
-            # Save the model to the output directory as a pickle file.
-            model_path = os.path.join(output_directory, model_name_fp + '_model.pkl')
-            joblib.dump(best_model, model_path)
-            logging.info('Saved the %s model to %s', model_name, model_path)
+            # Save a plot with F1, Precision, and Recall scores for chrY
+            if 'chrY' in chromosomes:
+                logging.info('Plotting scores for %s model on chrY.', model_name)
+                # Create a bar plot for the F1 scores by chromosome.
+                chry_f1 = f1_scores.get((model_name, 'chrY'), 0)
+                chry_precision = precision_scores.get((model_name, 'chrY'), 0)
+                chry_recall = recall_scores.get((model_name, 'chrY'), 0)
 
-        logging.info('Completed training and evaluation for %s model.', model_name)
+                # plt.figure(figsize=(10, 6))
 
-        # Run SHAP if full analysis and no leave-outs (SHAP is slow)
-        if not split_80_20 and no_leave_out:
-            logging.info('Running feature importance analysis for %s model.', model_name)
-            classifier = best_model.named_steps['classifier']
+                # Make it way smaller for better visibility.
+                plt.figure(figsize=(6, 4))
 
-            # For Random Forest, use both native importance and SHAP (with aggressive sampling)
-            if model_name == 'Random_Forest':
-                try:
-                    # 1. Native Gini importance (instant)
-                    feature_importances = classifier.feature_importances_
-                    feature_names = X_train.columns.tolist()
-                    
-                    importance_df = pd.DataFrame({
-                        'feature': feature_names,
-                        'importance': feature_importances
-                    }).sort_values('importance', ascending=True)
-                    
-                    plt.figure(figsize=(10, 8))
-                    plt.barh(importance_df['feature'], importance_df['importance'])
-                    plt.xlabel('Feature Importance (Gini)')
-                    plt.ylabel('Feature')
-                    plt.title('Random Forest Feature Importances (Gini)')
-                    plt.tight_layout()
-                    importance_plot_path = os.path.join(output_directory, model_name_fp + '_feature_importance_plot.png')
-                    plt.savefig(importance_plot_path, dpi=300, bbox_inches='tight')
-                    plt.close()
-                    logging.info('Saved Random Forest Gini importance plot to %s', importance_plot_path)
-                    
-                    importance_csv_path = os.path.join(output_directory, model_name_fp + '_feature_importances.csv')
-                    importance_df.sort_values('importance', ascending=False).to_csv(importance_csv_path, index=False)
-                    logging.info('Saved feature importances to %s', importance_csv_path)
-                    
-                    # 2. SHAP analysis with aggressive sampling for efficiency
-                    logging.info('Computing SHAP values for Random Forest (with sampling)...')
-                    X_train_numeric = X_train.copy()
-                    for col in X_train_numeric.columns:
-                        if X_train_numeric[col].dtype == 'object':
-                            X_train_numeric[col] = pd.to_numeric(X_train_numeric[col], errors='coerce')
-                    X_train_numeric = X_train_numeric.fillna(0).astype('float64')
-                    
-                    # Aggressive sampling for RF SHAP: reduce from 148k to ~300 samples
-                    explain_size = min(300, len(X_train_numeric))
-                    background_size = min(50, len(X_train_numeric) // 100)  # ~1% of data
-                    X_explain = shap.sample(X_train_numeric, explain_size, random_state=42)
-                    X_background = shap.sample(X_train_numeric, background_size, random_state=42)
-                    
-                    logging.info('SHAP RF: explain_size=%d, background_size=%d (from %d total)', 
-                                 explain_size, background_size, len(X_train_numeric))
-                    
-                    # Use interventional mode for standard SHAP values (not interactions)
-                    explainer = shap.TreeExplainer(classifier)
-                    shap_values = explainer.shap_values(X_explain, check_additivity=False)
-                    
-                    logging.info('SHAP raw output type: %s, raw shape: %s', 
-                                 type(shap_values), 
-                                 shap_values.shape if hasattr(shap_values, 'shape') else 'N/A')
-                    
-                    # Handle different output formats
-                    if isinstance(shap_values, list):
-                        # List of arrays for each class
-                        shap_values = shap_values[1]  # Use positive class
-                    elif len(shap_values.shape) == 3:
-                        # 3D array: (n_samples, n_features, n_classes)
-                        shap_values = shap_values[:, :, 1]  # Select positive class
-                    
-                    logging.info('SHAP debug: shap_values shape=%s (final), X_explain shape=%s', 
-                                 shap_values.shape, X_explain.shape)
-                    
-                    # Ensure X_explain is explicitly indexed by feature names
-                    X_explain_for_plot = X_explain.reset_index(drop=True)
-                    
-                    # SHAP summary plot
-                    plt.figure(figsize=(12, 8))
-                    shap.summary_plot(shap_values, X_explain_for_plot, show=False, max_display=15)
-                    shap_plot_path = os.path.join(output_directory, model_name_fp + '_shap_summary_plot.png')
-                    plt.savefig(shap_plot_path, dpi=300, bbox_inches='tight')
-                    plt.close()
-                    logging.info('Saved SHAP summary plot to %s', shap_plot_path)
-                    
-                    # SHAP bar plot (mean |SHAP|)
-                    plt.figure(figsize=(10, 8))
-                    shap.summary_plot(shap_values, X_explain, plot_type='bar', show=False)
-                    bar_plot_path = os.path.join(output_directory, model_name_fp + '_shap_importance_plot.png')
-                    plt.savefig(bar_plot_path, dpi=300, bbox_inches='tight')
-                    plt.close()
-                    logging.info('Saved SHAP importance plot to %s', bar_plot_path)
-                    
-                except Exception as exc:
-                    logging.warning('SHAP analysis skipped for %s: %s', model_name, exc)
-            
-            # For other models, use SHAP
+                # Plot F1, Precision, and Recall scores for chrY.
+                sns.barplot(x=['F1 Score', 'Precision', 'Recall'], y=[chry_f1, chry_precision, chry_recall], color='black')
+
+                # plt.xlabel('Metric')
+                plt.ylabel('Score')
+                plt.title('%s Scores for %s Model on chrY' % (model_name, model_name))
+                plt.xticks(rotation=45)
+                plt.legend()
+                plt.tight_layout()
+                # Save the plot to the output directory.
+                score_plot_path = os.path.join(output_directory, model_name + '_scores_chrY.png')
+                plt.savefig(score_plot_path)
+                plt.close()
+                logging.info('Saved the scores plot for chrY to %s', score_plot_path)
+
+            for metric, scores in zip(metrics, [f1_scores, precision_scores, recall_scores]):
+                logging.info('Plotting %s for %s model by chromosome.', metric, model_name)
+                # Create a bar plot for the F1 scores by chromosome.
+                # model_f1_scores = {chrom: f1_scores[(model_name, chrom)] for chrom
+                # in chromosomes if (model_name, chrom) in f1_scores}
+                model_scores = {chrom: scores[(model_name, chrom)] for chrom in chromosomes if (model_name, chrom) in scores}
+
+                plt.figure(figsize=(10, 6))
+                # Smaller figure size for better visibility.
+                # plt.figure(figsize=(8, 5))
+                ax = sns.barplot(x=list(model_scores.keys()), y=list(model_scores.values()), color='black')
+
+                # Annotate each bar with the number of SVs in the training set for that
+                # chromosome.
+                # Put the number of SVs above each bar.
+                # for i, (chrom, score) in enumerate(model_scores.items()):
+                #     num_sv = sv_counts[chrom]
+                #     ax.text(i, score + 0.01, f'{num_sv}', ha='center', va='bottom', fontsize=8)
+
+                plt.xlabel('Chromosome')
+                plt.ylabel(metric)
+                plt.title('%s for %s Model by Chromosome' % (metric, model_name))
+                plt.xticks(rotation=45)
+                plt.tight_layout()
+                # Save the plot to the output directory.
+                score_plot_path = os.path.join(output_directory, model_name + '_%s_by_chromosome.png' % metric.lower().replace(' ', '_'))
+                plt.savefig(score_plot_path)
+                plt.close()
+                logging.info('Saved the %s plot to %s', metric, score_plot_path)
+
+    else:
+        # =======================================================
+        # Train the model using cross-validation and grid search for hyperparameter tuning.
+        # =======================================================
+        cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+        for model_name, pipeline in pipelines.items():
+            logging.info('Training model class %s', model_name)
+            model_name_fp = "contextscore_" + model_name.lower() + "_leaveout_" + leave_out
+
+            if split_80_20:
+                model_name_fp += "_80_20_split"
+
+            # Perform grid search to find the best hyperparameters for the model, optimizing for precision to prioritize reducing false positives.
+            # Convert categorical columns to numeric
+            X_train_processed = X_train.copy()
+            for col in X_train_processed.columns:
+                if X_train_processed[col].dtype == 'category':
+                    X_train_processed[col] = X_train_processed[col].cat.codes
+                elif X_train_processed[col].dtype == 'object':
+                    X_train_processed[col] = pd.to_numeric(X_train_processed[col], errors='coerce')
+
+            X_train_processed = X_train_processed.fillna(0).astype('float64')
+
+            grid_search = GridSearchCV(estimator=pipeline, param_grid=param_grids[model_name], cv=cv, scoring='precision', n_jobs=-1)
+            grid_search.fit(X_train_processed, y_train)
+            logging.info('Best hyperparameters for %s: %s', model_name, grid_search.best_params_)
+
+            # Get predicted probabilities for the training and testing sets.
+            best_model = grid_search.best_estimator_
+
+            # Save plots only for 80-20 split since the ROC curve will be overly optimistic when using all the data for training and testing.
+            if split_80_20:
+                y_train_prob = best_model.predict_proba(X_train)[:, 1]
+                y_test_prob = best_model.predict_proba(X_test)[:, 1]
+
+                # Compute the ROC curve and ROC area for the training set.
+                fpr_train, tpr_train, _ = roc_curve(y_train, y_train_prob)
+                roc_auc_train = auc(fpr_train, tpr_train)
+
+                # Compute the ROC curve and ROC area for the testing set.
+                fpr_test, tpr_test, thresholds = roc_curve(y_test, y_test_prob)
+                roc_auc_test = auc(fpr_test, tpr_test)
+
+                # Print the ROC AUC scores.
+                logging.info('ROC AUC score for the training set: %f', roc_auc_train)
+                logging.info('ROC AUC score for the testing set: %f', roc_auc_test)
+
+                # Plot the ROC curve for the training set.
+                plt.figure()
+                plt.plot(fpr_train, tpr_train, color='blue', lw=2, label='ROC curve (area = %0.3f)' % roc_auc_train)
+                # plt.plot(fpr, tpr, color='darkorange', lw=2, label='ROC curve (area = %0.2f)' % roc_auc)
+                plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+                plt.xlim([0.0, 1.0])
+                plt.ylim([0.0, 1.05])
+                plt.xlabel('False Positive Rate')
+                plt.ylabel('True Positive Rate')
+                model_name_label = model_name.replace("_", " ")
+                plt.title('{} Receiver Operating Characteristic (Training Set)'.format(model_name_label))
+                plt.legend(loc='lower right')
+                # Save the plot to the output directory.
+                roc_plot_path = os.path.join(output_directory, model_name_fp + '_roc_curve.png')
+                plt.savefig(roc_plot_path)
+                plt.close()
+                logging.info('Saved the ROC curve to %s', roc_plot_path)
+
+                # Plot the ROC curve for the testing set.
+                plt.figure()
+                plt.plot(fpr_test, tpr_test, color='blue', lw=2, label='ROC curve (area = %0.3f)' % roc_auc_test)
+                plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+                plt.xlim([0.0, 1.0])
+                plt.ylim([0.0, 1.05])
+                plt.xlabel('False Positive Rate')
+                plt.ylabel('True Positive Rate')
+                plt.title('{} Receiver Operating Characteristic (Testing Set)'.format(model_name_label))
+                plt.legend(loc='lower right')
+                # Save the plot to the output directory.
+                roc_plot_path = os.path.join(output_directory, model_name + '_roc_curve_test.png')
+                plt.savefig(roc_plot_path)
+                plt.close()
+                logging.info('Saved the ROC curve to %s', roc_plot_path)
             else:
-                # Prepare numeric data for SHAP
-                X_train_numeric = X_train.copy()
-                for col in X_train_numeric.columns:
-                    if X_train_numeric[col].dtype == 'object':
-                        X_train_numeric[col] = pd.to_numeric(X_train_numeric[col], errors='coerce')
+                # Save the model to the output directory as a pickle file.
+                model_path = os.path.join(output_directory, model_name_fp + '_model.pkl')
+                joblib.dump(best_model, model_path)
+                logging.info('Saved the %s model to %s', model_name, model_path)
 
-                X_train_numeric = X_train_numeric.fillna(0).astype('float64')
+            logging.info('Completed training and evaluation for %s model.', model_name)
 
-                # Bound SHAP workload to avoid OOM/core-dump on large full-model runs.
-                explain_size = min(5000, len(X_train_numeric))
-                background_size = min(300, len(X_train_numeric))
-                X_explain = shap.sample(X_train_numeric, explain_size, random_state=42)
-                X_background = shap.sample(X_train_numeric, background_size, random_state=42)
+            # Run SHAP if full analysis and no leave-outs (SHAP is slow)
+            if not split_80_20 and no_leave_out:
+                logging.info('Running feature importance analysis for %s model.', model_name)
+                classifier = best_model.named_steps['classifier']
 
-                logging.info(
-                    'SHAP sampling: explain_size=%d, background_size=%d (from %d training rows)',
-                    len(X_explain), len(X_background), len(X_train_numeric)
-                )
+                # For Random Forest, use both native importance and SHAP (with aggressive sampling)
+                if model_name == 'Random_Forest':
+                    try:
+                        # 1. Native Random Forest feature importance (instant)
+                        feature_importances = classifier.feature_importances_
+                        feature_names = X_train.columns.tolist()
+                        display_feature_names = get_display_feature_names(feature_names)
+                        
+                        importance_df = pd.DataFrame({
+                            'feature': feature_names,
+                            'feature_display': display_feature_names,
+                            'importance': feature_importances
+                        }).sort_values('importance', ascending=True)
+                        
+                        plt.figure(figsize=(10, 8))
+                        plt.barh(importance_df['feature_display'], importance_df['importance'])
+                        plt.xlabel('Feature Importance')
+                        plt.ylabel('Feature')
+                        plt.title('Random Forest Feature Importance')
+                        plt.tight_layout()
+                        importance_plot_path = os.path.join(output_directory, model_name_fp + '_feature_importance_plot.png')
+                        plt.savefig(importance_plot_path, dpi=300, bbox_inches='tight')
+                        plt.close()
+                        logging.info('Saved Random Forest feature-importance plot to %s', importance_plot_path)
+                        
+                        importance_csv_path = os.path.join(output_directory, model_name_fp + '_feature_importances.csv')
+                        importance_df.sort_values('importance', ascending=False).to_csv(importance_csv_path, index=False)
+                        logging.info('Saved feature importances to %s', importance_csv_path)
+                        
+                        if ENABLE_SHAP:
+                            # 2. SHAP analysis with aggressive sampling for efficiency
+                            logging.info('Computing SHAP values for Random Forest (with sampling)...')
+                            X_train_numeric = X_train.copy()
+                            for col in X_train_numeric.columns:
+                                if X_train_numeric[col].dtype == 'object':
+                                    X_train_numeric[col] = pd.to_numeric(X_train_numeric[col], errors='coerce')
+                            X_train_numeric = X_train_numeric.fillna(0).astype('float64')
+                            
+                            # Aggressive sampling for RF SHAP: reduce from 148k to ~300 samples
+                            explain_size = min(300, len(X_train_numeric))
+                            background_size = min(50, len(X_train_numeric) // 100)  # ~1% of data
+                            X_explain = shap.sample(X_train_numeric, explain_size, random_state=42)
+                            X_background = shap.sample(X_train_numeric, background_size, random_state=42)
+                            
+                            logging.info('SHAP RF: explain_size=%d, background_size=%d (from %d total)', 
+                                        explain_size, background_size, len(X_train_numeric))
+                            
+                            # Use interventional mode for standard SHAP values (not interactions)
+                            explainer = shap.TreeExplainer(classifier)
+                            shap_values = explainer.shap_values(X_explain, check_additivity=False)
+                            
+                            logging.info('SHAP raw output type: %s, raw shape: %s', 
+                                        type(shap_values), 
+                                        shap_values.shape if hasattr(shap_values, 'shape') else 'N/A')
+                            
+                            # Handle different output formats
+                            if isinstance(shap_values, list):
+                                # List of arrays for each class
+                                shap_values = shap_values[1]  # Use positive class
+                            elif len(shap_values.shape) == 3:
+                                # 3D array: (n_samples, n_features, n_classes)
+                                shap_values = shap_values[:, :, 1]  # Select positive class
+                            
+                            logging.info('SHAP debug: shap_values shape=%s (final), X_explain shape=%s', 
+                                        shap_values.shape, X_explain.shape)
+                            
+                            # Ensure X_explain is explicitly indexed by feature names
+                            X_explain_for_plot = X_explain.reset_index(drop=True)
+                            X_explain_display = X_explain_for_plot.rename(columns=get_display_feature_name)
+                            
+                            # SHAP summary plot
+                            plt.figure(figsize=(12, 8))
+                            shap.summary_plot(shap_values, X_explain_display, show=False, max_display=15)
+                            shap_plot_path = os.path.join(output_directory, model_name_fp + '_shap_summary_plot.png')
+                            plt.savefig(shap_plot_path, dpi=300, bbox_inches='tight')
+                            plt.close()
+                            logging.info('Saved SHAP summary plot to %s', shap_plot_path)
+                            
+                            # SHAP bar plot (mean |SHAP|)
+                            plt.figure(figsize=(10, 8))
+                            shap.summary_plot(shap_values, X_explain_display, plot_type='bar', show=False)
+                            bar_plot_path = os.path.join(output_directory, model_name_fp + '_shap_importance_plot.png')
+                            plt.savefig(bar_plot_path, dpi=300, bbox_inches='tight')
+                            plt.close()
+                            logging.info('Saved SHAP importance plot to %s', bar_plot_path)
+                        
+                    except Exception as exc:
+                        logging.warning('SHAP analysis skipped for %s: %s', model_name, exc)
+                
+                # For other models, use SHAP
+                else:
+                    if ENABLE_SHAP:
+                        logging.info('Computing SHAP values for %s model...', model_name)
+                        # Prepare numeric data for SHAP
+                        X_train_numeric = X_train.copy()
+                        for col in X_train_numeric.columns:
+                            if X_train_numeric[col].dtype == 'object':
+                                X_train_numeric[col] = pd.to_numeric(X_train_numeric[col], errors='coerce')
 
-                try:
-                    if model_name == 'XGBoost':
-                        explainer = shap.TreeExplainer(classifier, feature_perturbation='tree_path_dependent')
-                        shap_values = explainer.shap_values(X_explain)
-                    elif model_name == 'Logistic_Regression':
-                        explainer = shap.LinearExplainer(classifier, X_background)
-                        shap_values = explainer.shap_values(X_explain)
-                    else:
-                        explainer = shap.Explainer(classifier, X_background)
-                        shap_values = explainer(X_explain)
+                        X_train_numeric = X_train_numeric.fillna(0).astype('float64')
 
-                    # Some SHAP explainers return one array per class. For binary
-                    # classification plots, use positive class values.
-                    if isinstance(shap_values, list) and len(shap_values) > 1:
-                        shap_values_to_plot = shap_values[1]
-                    else:
-                        shap_values_to_plot = shap_values
+                        # Bound SHAP workload to avoid OOM/core-dump on large full-model runs.
+                        explain_size = min(5000, len(X_train_numeric))
+                        background_size = min(300, len(X_train_numeric))
+                        X_explain = shap.sample(X_train_numeric, explain_size, random_state=42)
+                        X_background = shap.sample(X_train_numeric, background_size, random_state=42)
 
-                    # 1. Summary plot
-                    plt.figure(figsize=(10, 8))
-                    shap.summary_plot(shap_values_to_plot, X_explain, show=False)
-                    shap_plot_path = os.path.join(output_directory, model_name_fp + '_shap_summary_plot.png')
-                    plt.savefig(shap_plot_path, dpi=300, bbox_inches='tight')
-                    plt.close()
-                    logging.info('Saved the SHAP summary plot to %s', shap_plot_path)
+                        logging.info(
+                            'SHAP sampling: explain_size=%d, background_size=%d (from %d training rows)',
+                            len(X_explain), len(X_background), len(X_train_numeric)
+                        )
 
-                    # 2. Bar plot showing mean absolute SHAP values (feature importance)
-                    plt.figure(figsize=(10, 8))
-                    shap.summary_plot(shap_values_to_plot, X_explain, plot_type='bar', show=False)
-                    bar_plot_path = os.path.join(output_directory, model_name_fp + '_shap_importance_plot.png')
-                    plt.savefig(bar_plot_path, dpi=300, bbox_inches='tight')
-                    plt.close()
-                    logging.info('Saved the SHAP importance plot to %s', bar_plot_path)
-                except Exception as exc:
-                    logging.warning('SHAP analysis failed for %s: %s. Continuing without SHAP outputs.', model_name, exc)
+                        try:
+                            if model_name == 'XGBoost':
+                                explainer = shap.TreeExplainer(classifier, feature_perturbation='tree_path_dependent')
+                                shap_values = explainer.shap_values(X_explain)
+                            elif model_name == 'Logistic_Regression':
+                                explainer = shap.LinearExplainer(classifier, X_background)
+                                shap_values = explainer.shap_values(X_explain)
+                            else:
+                                explainer = shap.Explainer(classifier, X_background)
+                                shap_values = explainer(X_explain)
+
+                            # Some SHAP explainers return one array per class. For binary
+                            # classification plots, use positive class values.
+                            if isinstance(shap_values, list) and len(shap_values) > 1:
+                                shap_values_to_plot = shap_values[1]
+                            else:
+                                shap_values_to_plot = shap_values
+
+                            X_explain_display = X_explain.rename(columns=get_display_feature_name)
+
+                            # 1. Summary plot
+                            plt.figure(figsize=(10, 8))
+                            shap.summary_plot(shap_values_to_plot, X_explain_display, show=False)
+                            shap_plot_path = os.path.join(output_directory, model_name_fp + '_shap_summary_plot.png')
+                            plt.savefig(shap_plot_path, dpi=300, bbox_inches='tight')
+                            plt.close()
+                            logging.info('Saved the SHAP summary plot to %s', shap_plot_path)
+
+                            # 2. Bar plot showing mean absolute SHAP values (feature importance)
+                            plt.figure(figsize=(10, 8))
+                            shap.summary_plot(shap_values_to_plot, X_explain_display, plot_type='bar', show=False)
+                            bar_plot_path = os.path.join(output_directory, model_name_fp + '_shap_importance_plot.png')
+                            plt.savefig(bar_plot_path, dpi=300, bbox_inches='tight')
+                            plt.close()
+                            logging.info('Saved the SHAP importance plot to %s', bar_plot_path)
+                        except Exception as exc:
+                            logging.warning('SHAP analysis failed for %s: %s. Continuing without SHAP outputs.', model_name, exc)
 
 if __name__ == '__main__':
     # Parse the command line arguments.
@@ -633,10 +787,11 @@ if __name__ == '__main__':
     parser.add_argument("--sample_coverage_na12878", type=float, required=True, help="Mean read depth coverage for NA12878 sample (required)")
     parser.add_argument("--sample_coverage_na12879", type=float, required=True, help="Mean read depth coverage for NA12879 sample (required)")
     parser.add_argument("--split_80_20", action='store_true', help="Whether to split the data into training and testing sets using an 80-20 split. If not specified, all the data will be used for training and testing, and cross-validation will be used to evaluate the model performance.")
+    parser.add_argument("--per_chr_validation", action='store_true', help="Whether to run per-chromosome cross-validation.")
     args = parser.parse_args()
 
     # Run the program.
-    logging.info('Training the model, split_80_20 = %s.', args.split_80_20)
-    train(args.tp_hg002_grch37, args.fp_hg002_grch37, args.tp_visor_grch38, args.fp_visor_grch38, args.tp_na12877_grch38, args.fp_na12877_grch38, args.tp_na12878_grch38, args.fp_na12878_grch38, args.tp_na12879_grch38, args.fp_na12879_grch38, args.outdir, args.annovar, args.annovar_db, args.outdiranno, args.leave_out, args.split_80_20, args.sample_coverage_hg002, args.sample_coverage_visor, args.sample_coverage_na12877, args.sample_coverage_na12878, args.sample_coverage_na12879)
+    logging.info('Training the model, split_80_20 = %s, leave_out = %s, per_chr_validation = %s', args.split_80_20, args.leave_out, args.per_chr_validation)
+    train(args.tp_hg002_grch37, args.fp_hg002_grch37, args.tp_visor_grch38, args.fp_visor_grch38, args.tp_na12877_grch38, args.fp_na12877_grch38, args.tp_na12878_grch38, args.fp_na12878_grch38, args.tp_na12879_grch38, args.fp_na12879_grch38, args.outdir, args.annovar, args.annovar_db, args.outdiranno, args.leave_out, args.split_80_20, args.per_chr_validation, args.sample_coverage_hg002, args.sample_coverage_visor, args.sample_coverage_na12877, args.sample_coverage_na12878, args.sample_coverage_na12879)
     logging.info('done.')
 

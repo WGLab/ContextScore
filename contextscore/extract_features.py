@@ -656,7 +656,6 @@ def add_annotations(data, input_bed, annovar_path, db_path, anno_outdir, buildve
 
     annotate(annovar_file, annovar_path, db_path, anno_outdir, buildversion)
 
-    # anno_file = os.path.join(anno_outdir, 'regions.hg38_multianno.txt')
     anno_file = os.path.join(anno_outdir, 'regions.{}_multianno.txt'.format(buildversion))
     if not os.path.exists(anno_file):
         logging.error('ANNOVAR annotation file does not exist: %s', anno_file)
