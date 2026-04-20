@@ -3,10 +3,15 @@ Assign confidence scores to SV datasets based on coverage, genomic context, and 
 
 [![unit tests](https://github.com/WGLab/ContextScore/actions/workflows/predict-test.yml/badge.svg)](https://github.com/WGLab/ContextScore/actions/workflows/predict-test.yml)
 
+## Installation
+```bash
+conda install -c wglab -c bioconda -c conda-forge contextscore
+
+# Or using mamba (faster than conda for large environments)
+mamba install -c wglab contextscore
+```
+
 ## User Workflow
-
-ContextScore exposes a single user-facing command for prediction:
-
 ```bash
 contextscore --input input.vcf --output scored.vcf --model full_model.pkl --sample_coverage 30 \
 	--annovar /path/to/annovar --annovar-db /path/to/humandb
