@@ -326,7 +326,7 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
             ax.set_xlabel('Confidence Score')
             ax.set_ylabel('Count')
             ax.set_title('Probability Distribution')
-            plot_path = os.path.join(output_dir, 'probabilities_seaborn.png')
+            plot_path = os.path.join(output_dir, 'prob_dist.svg')
             plt.savefig(plot_path)
             plt.close()
             logging.info('Saved debug probability plot to %s', plot_path)

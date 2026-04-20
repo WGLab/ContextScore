@@ -36,8 +36,6 @@ from sklearn.model_selection import GridSearchCV, StratifiedKFold
 from xgboost import XGBClassifier
 from sklearn.svm import SVC
 
-# Import SHAP for model interpretation.
-import shap
 from sklearn.metrics import roc_curve, auc
 
 import matplotlib.pyplot as plt
@@ -74,6 +72,9 @@ FEATURE_DISPLAY_NAMES = {
 
 ENABLE_SHAP = False
 
+if ENABLE_SHAP:
+    import shap
+
 def get_display_feature_name(feature_name):
     """Map internal feature keys to human-readable labels for plots/tables."""
     return FEATURE_DISPLAY_NAMES.get(feature_name, feature_name.replace('_', ' '))
@@ -82,6 +83,31 @@ def get_display_feature_name(feature_name):
 def get_display_feature_names(feature_names):
     """Return human-readable labels in the same order as input feature names."""
     return [get_display_feature_name(name) for name in feature_names]
+
+
+def preprocess_feature_matrix(feature_df):
+    """Convert mixed-type feature columns to numeric values for model fitting/inference."""
+    processed_df = feature_df.copy()
+    for col in processed_df.columns:
+        if processed_df[col].dtype == 'category':
+            processed_df[col] = processed_df[col].cat.codes
+        elif processed_df[col].dtype == 'object':
+            processed_df[col] = pd.to_numeric(processed_df[col], errors='coerce')
+
+    return processed_df.fillna(0).astype('float64')
+
+
+def get_cv_splits(y, max_splits=5):
+    """Choose a valid number of stratified CV folds for the provided labels."""
+    class_counts = y.value_counts()
+    if class_counts.empty or len(class_counts) < 2:
+        return None
+
+    n_splits = min(max_splits, int(class_counts.min()))
+    if n_splits < 2:
+        return None
+
+    return StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
 
 def balance_tp_fp_datasets(tp_data, fp_data):
     """Balance the true positive and false positive datasets by undersampling the lower-count class."""
@@ -408,11 +434,9 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
         precision_scores = {}
         recall_scores = {}
         for model_name, pipeline in pipelines.items():
-            model = pipeline.named_steps['classifier']
-
-            # Dictionary with number of SVs in the training set for each chromosome.
+            # Dictionary with number of SVs in the held-out set for each chromosome.
             sv_counts = {chrom: features[chrom_col == chrom].shape[0] for chrom in chromosomes}
-            logging.info('Number of SVs in the training set for each chromosome: %s', sv_counts)
+            logging.info('Number of SVs in the held-out set for each chromosome: %s', sv_counts)
 
             for chrom in chromosomes:
                 logging.info('Training the %s model on chromosome %s.', model_name, chrom)
@@ -429,10 +453,37 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
 
                 logging.info('Training set size: %d, Testing set size: %d',
                             X_train_chrom.shape[0], X_test_chrom.shape[0])
-                # Train the model.
-                model.fit(X_train_chrom, y_train_chrom)
+
+                X_train_chrom_processed = preprocess_feature_matrix(X_train_chrom)
+                X_test_chrom_processed = preprocess_feature_matrix(X_test_chrom)
+
+                fold_cv = get_cv_splits(y_train_chrom)
+                if fold_cv is None:
+                    logging.warning(
+                        'Skipping chromosome %s for %s: insufficient class balance for stratified CV.',
+                        chrom,
+                        model_name
+                    )
+                    continue
+
+                grid_search = GridSearchCV(
+                    estimator=pipeline,
+                    param_grid=param_grids[model_name],
+                    cv=fold_cv,
+                    scoring='precision',
+                    n_jobs=-1
+                )
+                grid_search.fit(X_train_chrom_processed, y_train_chrom)
+                best_model = grid_search.best_estimator_
+                logging.info(
+                    'Best hyperparameters for %s on held-out chromosome %s: %s',
+                    model_name,
+                    chrom,
+                    grid_search.best_params_
+                )
+
                 # Get the predicted probabilities for the testing set.
-                y_test_chrom_prob = model.predict_proba(X_test_chrom)[:, 1]
+                y_test_chrom_prob = best_model.predict_proba(X_test_chrom_processed)[:, 1]
                 # Compute the ROC curve and ROC area for the testing set.
                 fpr_chrom, tpr_chrom, _ = roc_curve(y_test_chrom, y_test_chrom_prob)
                 roc_auc_chrom = auc(fpr_chrom, tpr_chrom)
@@ -481,10 +532,9 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
                 plt.ylabel('Score')
                 plt.title('%s Scores for %s Model on chrY' % (model_name, model_name))
                 plt.xticks(rotation=45)
-                plt.legend()
                 plt.tight_layout()
                 # Save the plot to the output directory.
-                score_plot_path = os.path.join(output_directory, model_name + '_scores_chrY.png')
+                score_plot_path = os.path.join(output_directory, model_name + '_scores_chrY.svg')
                 plt.savefig(score_plot_path)
                 plt.close()
                 logging.info('Saved the scores plot for chrY to %s', score_plot_path)
@@ -514,7 +564,7 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
                 plt.xticks(rotation=45)
                 plt.tight_layout()
                 # Save the plot to the output directory.
-                score_plot_path = os.path.join(output_directory, model_name + '_%s_by_chromosome.png' % metric.lower().replace(' ', '_'))
+                score_plot_path = os.path.join(output_directory, model_name + '_%s_by_chromosome.svg' % metric.lower().replace(' ', '_'))
                 plt.savefig(score_plot_path)
                 plt.close()
                 logging.info('Saved the %s plot to %s', metric, score_plot_path)
@@ -523,7 +573,10 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
         # =======================================================
         # Train the model using cross-validation and grid search for hyperparameter tuning.
         # =======================================================
-        cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+        cv = get_cv_splits(y_train)
+        if cv is None:
+            raise ValueError('Unable to run training: need at least two classes with at least two samples each for stratified CV.')
+
         for model_name, pipeline in pipelines.items():
             logging.info('Training model class %s', model_name)
             model_name_fp = "contextscore_" + model_name.lower() + "_leaveout_" + leave_out
@@ -532,15 +585,8 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
                 model_name_fp += "_80_20_split"
 
             # Perform grid search to find the best hyperparameters for the model, optimizing for precision to prioritize reducing false positives.
-            # Convert categorical columns to numeric
-            X_train_processed = X_train.copy()
-            for col in X_train_processed.columns:
-                if X_train_processed[col].dtype == 'category':
-                    X_train_processed[col] = X_train_processed[col].cat.codes
-                elif X_train_processed[col].dtype == 'object':
-                    X_train_processed[col] = pd.to_numeric(X_train_processed[col], errors='coerce')
-
-            X_train_processed = X_train_processed.fillna(0).astype('float64')
+            X_train_processed = preprocess_feature_matrix(X_train)
+            X_test_processed = preprocess_feature_matrix(X_test)
 
             grid_search = GridSearchCV(estimator=pipeline, param_grid=param_grids[model_name], cv=cv, scoring='precision', n_jobs=-1)
             grid_search.fit(X_train_processed, y_train)
@@ -551,8 +597,8 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
 
             # Save plots only for 80-20 split since the ROC curve will be overly optimistic when using all the data for training and testing.
             if split_80_20:
-                y_train_prob = best_model.predict_proba(X_train)[:, 1]
-                y_test_prob = best_model.predict_proba(X_test)[:, 1]
+                y_train_prob = best_model.predict_proba(X_train_processed)[:, 1]
+                y_test_prob = best_model.predict_proba(X_test_processed)[:, 1]
 
                 # Compute the ROC curve and ROC area for the training set.
                 fpr_train, tpr_train, _ = roc_curve(y_train, y_train_prob)
@@ -578,8 +624,7 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
                 model_name_label = model_name.replace("_", " ")
                 plt.title('{} Receiver Operating Characteristic (Training Set)'.format(model_name_label))
                 plt.legend(loc='lower right')
-                # Save the plot to the output directory.
-                roc_plot_path = os.path.join(output_directory, model_name_fp + '_roc_curve.png')
+                roc_plot_path = os.path.join(output_directory, model_name_fp + '_roc_curve_train.svg')
                 plt.savefig(roc_plot_path)
                 plt.close()
                 logging.info('Saved the ROC curve to %s', roc_plot_path)
@@ -595,7 +640,7 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
                 plt.title('{} Receiver Operating Characteristic (Testing Set)'.format(model_name_label))
                 plt.legend(loc='lower right')
                 # Save the plot to the output directory.
-                roc_plot_path = os.path.join(output_directory, model_name + '_roc_curve_test.png')
+                roc_plot_path = os.path.join(output_directory, model_name + '_roc_curve_test.svg')
                 plt.savefig(roc_plot_path)
                 plt.close()
                 logging.info('Saved the ROC curve to %s', roc_plot_path)
@@ -627,12 +672,13 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
                         }).sort_values('importance', ascending=True)
                         
                         plt.figure(figsize=(10, 8))
-                        plt.barh(importance_df['feature_display'], importance_df['importance'])
-                        plt.xlabel('Feature Importance')
-                        plt.ylabel('Feature')
+                        plt.bar(importance_df['feature_display'], importance_df['importance'])
+                        plt.ylabel('Feature Importance')
+                        plt.xlabel('Feature')
                         plt.title('Random Forest Feature Importance')
+                        plt.xticks(rotation=45, ha='right')
                         plt.tight_layout()
-                        importance_plot_path = os.path.join(output_directory, model_name_fp + '_feature_importance_plot.png')
+                        importance_plot_path = os.path.join(output_directory, model_name_fp + '_feature_importance_plot.svg')
                         plt.savefig(importance_plot_path, dpi=300, bbox_inches='tight')
                         plt.close()
                         logging.info('Saved Random Forest feature-importance plot to %s', importance_plot_path)
@@ -685,7 +731,7 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
                             # SHAP summary plot
                             plt.figure(figsize=(12, 8))
                             shap.summary_plot(shap_values, X_explain_display, show=False, max_display=15)
-                            shap_plot_path = os.path.join(output_directory, model_name_fp + '_shap_summary_plot.png')
+                            shap_plot_path = os.path.join(output_directory, model_name_fp + '_shap_summary_plot.svg')
                             plt.savefig(shap_plot_path, dpi=300, bbox_inches='tight')
                             plt.close()
                             logging.info('Saved SHAP summary plot to %s', shap_plot_path)
@@ -693,7 +739,7 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
                             # SHAP bar plot (mean |SHAP|)
                             plt.figure(figsize=(10, 8))
                             shap.summary_plot(shap_values, X_explain_display, plot_type='bar', show=False)
-                            bar_plot_path = os.path.join(output_directory, model_name_fp + '_shap_importance_plot.png')
+                            bar_plot_path = os.path.join(output_directory, model_name_fp + '_shap_importance_plot.svg')
                             plt.savefig(bar_plot_path, dpi=300, bbox_inches='tight')
                             plt.close()
                             logging.info('Saved SHAP importance plot to %s', bar_plot_path)
@@ -747,7 +793,7 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
                             # 1. Summary plot
                             plt.figure(figsize=(10, 8))
                             shap.summary_plot(shap_values_to_plot, X_explain_display, show=False)
-                            shap_plot_path = os.path.join(output_directory, model_name_fp + '_shap_summary_plot.png')
+                            shap_plot_path = os.path.join(output_directory, model_name_fp + '_shap_summary_plot.svg')
                             plt.savefig(shap_plot_path, dpi=300, bbox_inches='tight')
                             plt.close()
                             logging.info('Saved the SHAP summary plot to %s', shap_plot_path)
@@ -755,7 +801,7 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
                             # 2. Bar plot showing mean absolute SHAP values (feature importance)
                             plt.figure(figsize=(10, 8))
                             shap.summary_plot(shap_values_to_plot, X_explain_display, plot_type='bar', show=False)
-                            bar_plot_path = os.path.join(output_directory, model_name_fp + '_shap_importance_plot.png')
+                            bar_plot_path = os.path.join(output_directory, model_name_fp + '_shap_importance_plot.svg')
                             plt.savefig(bar_plot_path, dpi=300, bbox_inches='tight')
                             plt.close()
                             logging.info('Saved the SHAP importance plot to %s', bar_plot_path)
