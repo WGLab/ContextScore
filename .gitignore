@@ -185,3 +185,6 @@ tests/fixtures/output.vcf.avinput
 tests/fixtures/output.vcf.bed
 tests/fixtures/annotations/features.tsv
 tests/fixtures/annotations/regions.hg38_multianno.txt
+
+# Database files
+data/
