@@ -14,11 +14,11 @@ mamba install -c wglab contextscore
 ## Sources for annotation files used in the model (under data/ directory):
 | File | Source | Description | Link |
 | --- | --- | --- | --- |
-| `hg{19,38}_cytoband.txt` | UCSC Genome Browser | Cytoband annotations for human genome builds hg19 and hg38 | [UCSC hg19](https://hgdownload.soe.ucsc.edu/goldenPath/hg19/database/cytoBand.txt.gz) / [UCSC hg38](https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/cytoBand.txt.gz) |
+| `cytobands_hg{19,38}.txt` | UCSC Genome Browser | Cytoband annotations for human genome builds hg19 and hg38 | [UCSC hg19](https://hgdownload.soe.ucsc.edu/goldenPath/hg19/database/cytoBand.txt.gz) / [UCSC hg38](https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/cytoBand.txt.gz) |
 | `hg{19,38}_segmental_duplications.bed` | UCSC Genome Browser | Segmental duplication annotations for human genome builds hg19 and hg38 | [UCSC hg19](https://hgdownload.soe.ucsc.edu/goldenPath/hg19/database/segmentalDuplications.txt.gz) / [UCSC hg38](https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/segmentalDuplications.txt.gz) |
 | `phastcons100way_hg{19,38}.bed` | UCSC Genome Browser | PhastCons conservation scores for human genome builds hg19 and hg38 | [UCSC hg19](https://hgdownload.soe.ucsc.edu/goldenPath/hg19/database/phastCons100way.txt.gz) / [UCSC hg38](https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/phastCons100way.txt.gz) |
 | `simple_repeats_hg{19,38}.bed` | UCSC Genome Browser | Simple repeat annotations for human genome builds hg19 and hg38 | [UCSC hg19](https://hgdownload.soe.ucsc.edu/goldenPath/hg19/database/simpleRepeat.txt.gz) / [UCSC hg38](https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/simpleRepeat.txt.gz) |
-| `fragile_sites_hg38.bed (with hg19 liftover)` | [HumCFS](https://webs.iiitd.edu.in/raghava/humcfs/download.html) | Fragile site annotations for human genome build hg38 | [HumCFS](https://webs.iiitd.edu.in/raghava/humcfs/fragile_site_bed.zip) |
+| `fragile_sites_hg38.bed` / `fragile_sites_hg19_liftover.bed` | [HumCFS](https://webs.iiitd.edu.in/raghava/humcfs/download.html) | Fragile site annotations for human genome builds hg38 and hg19 (liftover) | [HumCFS](https://webs.iiitd.edu.in/raghava/humcfs/fragile_site_bed.zip) |
 
 ## User Workflow
 ```bash

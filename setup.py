@@ -1,9 +1,20 @@
+from pathlib import Path
 from setuptools import setup, find_packages
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+DATA_FILES = [
+    str(path)
+    for path in (PROJECT_ROOT / "data").glob("*")
+    if path.is_file()
+]
 
 setup(
     name="ContextScore",
     version="0.1.0",
     packages=find_packages(),
+    include_package_data=True,
+    data_files=[("contextscore/data", DATA_FILES)],
     install_requires=[
         "numpy",
         "pandas",

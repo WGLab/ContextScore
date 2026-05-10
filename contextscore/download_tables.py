@@ -1,5 +1,6 @@
 import pandas as pd
 import pymysql
+from pathlib import Path
 
 def download_ucsc(table_name: str, 
                  genome_version: str = "hg38",
@@ -42,21 +43,20 @@ def download_ucsc(table_name: str,
 
     # Save as BED file for BEDTools
     df.to_csv(output_file, sep="\t", index=False, header=False)
-    # df.to_csv("simple_repeats_test.bed", sep="\t", index=False, header=False)
-
     print("Downloaded UCSC " + table_name + " table for " + genome_version + " and saved as " + output_file)
 
 if __name__ == "__main__":
-    # Download the UCSC Simple Repeats table for hg38 and save as
-    # "simple_repeats_hg38.bed"
-    simple_repeat_file = "/mnt/isilon/wang_lab/perdomoj/data/UCSC_Tables/simple_repeats_hg38.bed"
+    data_dir = Path(__file__).resolve().parents[1] / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    # Download the UCSC Simple Repeats table for hg38
+    simple_repeat_file = str(data_dir / "simple_repeats_hg38.bed")
     download_ucsc(table_name="simpleRepeat",
                  genome_version="hg38",
                  output_file=simple_repeat_file)
     
-    # Download the UCSC phastCons100way table for hg38 and save as
-    # "phastCons100way_hg38.bed"
-    phastcons_file = "/mnt/isilon/wang_lab/perdomoj/data/UCSC_Tables/phastCons100way_hg38.bed"
+    # Download the UCSC phastCons100way table for hg38
+    phastcons_file = str(data_dir / "phastcons100way_hg38.bed")
     download_ucsc(table_name="phastCons100way",
                  genome_version="hg38",
                  output_file=phastcons_file)

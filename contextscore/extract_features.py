@@ -15,6 +15,7 @@ import os
 import sys
 import logging
 import heapq
+from pathlib import Path
 import numpy as np
 import pandas as pd
 import subprocess
@@ -23,6 +24,62 @@ from io import StringIO
 
 
 _BEDTOOLS_CHECKED = False
+
+
+def get_contextscore_data_file(file_name):
+    """Resolve a data file path from ContextScore's bundled data directory."""
+    env_data_dir = os.environ.get('CONTEXTSCORE_DATA_DIR')
+    candidate_dirs = []
+
+    if env_data_dir:
+        candidate_dirs.append(Path(env_data_dir))
+
+    # Source tree / editable install layout.
+    candidate_dirs.append(Path(__file__).resolve().parents[1] / 'data')
+
+    # data_files install layout from setup.py.
+    candidate_dirs.append(Path(sys.prefix) / 'contextscore' / 'data')
+
+    # Future-proof fallback if data ever moves under the package directory.
+    candidate_dirs.append(Path(__file__).resolve().parent / 'data')
+
+    for directory in candidate_dirs:
+        candidate = directory / file_name
+        if candidate.exists():
+            return str(candidate)
+
+    searched_dirs = ', '.join(str(directory) for directory in candidate_dirs)
+    raise FileNotFoundError(
+        f'Could not locate required data file {file_name}. Searched: {searched_dirs}. '
+        'Set CONTEXTSCORE_DATA_DIR to override the data directory.'
+    )
+
+
+def get_annotation_paths(buildversion):
+    """Return annotation file paths for the selected genome build."""
+    buildversion = str(buildversion).lower()
+    file_map = {
+        'hg38': {
+            'fragile_sites': 'fragile_sites_hg38.bed',
+            'phastcons': 'phastcons100way_hg38.bed',
+            'simple_repeats': 'simple_repeats_hg38.bed',
+            'cytobands': 'cytobands_hg38.txt',
+        },
+        'hg19': {
+            'fragile_sites': 'fragile_sites_hg19_liftover.bed',
+            'phastcons': 'phastcons100way_hg19.bed',
+            'simple_repeats': 'simple_repeats_hg19.bed',
+            'cytobands': 'cytobands_hg19.txt',
+        },
+    }
+
+    if buildversion not in file_map:
+        raise ValueError(f'Unsupported build version: {buildversion}. Please use hg38 or hg19.')
+
+    return {
+        key: get_contextscore_data_file(file_name)
+        for key, file_name in file_map[buildversion].items()
+    }
 
 
 def read_cytoband_file(cytoband_file):
@@ -573,20 +630,20 @@ def add_annotations(data, input_bed, annovar_path, db_path, anno_outdir, buildve
     """Add annotations to the features."""
     logging.info('Adding annotations to the features.')
 
+    try:
+        annotation_paths = get_annotation_paths(buildversion)
+    except (FileNotFoundError, ValueError) as exc:
+        logging.error('%s', exc)
+        sys.exit(1)
+
     # ---------------------------------------------------------------
-    # Annotate the fragile sites using a BED file from HumCFS (GRCh38/hg38).
+    # Annotate the fragile sites using a BED file from HumCFS.
     # https://webs.iiitd.edu.in/raghava/humcfs/download.html
     # ANNOVAR instructions are here:
     # https://annovar.openbioinformatics.org/en/latest/user-guide/region/
-    if buildversion == 'hg38':
-        fragile_sites_bed="/mnt/isilon/wang_lab/perdomoj/projects/ContextScore/Train/FragileSites/FragileSites_merged.bed"
-    elif buildversion == 'hg19':
-        fragile_sites_bed="/mnt/isilon/wang_lab/perdomoj/projects/ContextScore/Train/FragileSites/FragileSites_hg19.bed"
-    else:
-        logging.error('Unsupported build version: %s. Please use hg38 or hg19.', buildversion)
-        sys.exit(1)
+    fragile_sites_bed = annotation_paths['fragile_sites']
 
-    logging.info('Annotating the fragile sites using the BED file (GRCh38): %s', fragile_sites_bed)
+    logging.info('Annotating the fragile sites using the BED file (%s): %s', buildversion, fragile_sites_bed)
     fragile_sites_df = run_bedtools_intersect(input_bed, fragile_sites_bed, training_format)
 
     # Merge the fragile sites annotations with the true positive data.
@@ -597,15 +654,9 @@ def add_annotations(data, input_bed, annovar_path, db_path, anno_outdir, buildve
 
     # ---------------------------------------------------------------
     # Annotate conserved regions using a UCSC Table Browser BED file for
-    # phastCons100way (GRCh38/hg38).
-    if buildversion == 'hg38':
-        phastCons_bed = "/mnt/isilon/wang_lab/perdomoj/data/UCSC_Tables/phastCons100way_hg38.bed"
-    elif buildversion == 'hg19':
-        phastCons_bed = "/mnt/isilon/wang_lab/perdomoj/data/UCSC_Tables/phastCons100way_hg19.bed"
-    else:
-        logging.error('Unsupported build version: %s. Please use hg38 or hg19.', buildversion)
-        sys.exit(1)
-    logging.info('Annotating conserved regions using the BED file (GRCh38): %s', phastCons_bed)
+    # phastCons100way.
+    phastCons_bed = annotation_paths['phastcons']
+    logging.info('Annotating conserved regions using the BED file (%s): %s', buildversion, phastCons_bed)
     phastCons_df = run_bedtools_intersect(input_bed, phastCons_bed, training_format)
 
     # Merge the phastCons annotations with the true positive data.
@@ -616,15 +667,9 @@ def add_annotations(data, input_bed, annovar_path, db_path, anno_outdir, buildve
 
     # ---------------------------------------------------------------
     # Annotate simple repeats using a UCSC Table Browser BED file for
-    # simpleRepeat (GRCh38/hg38).
-    if buildversion == 'hg38':
-        simpleRepeat_bed = "/mnt/isilon/wang_lab/perdomoj/data/UCSC_Tables/simple_repeats_hg38.bed"
-    elif buildversion == 'hg19':
-        simpleRepeat_bed = "/mnt/isilon/wang_lab/perdomoj/data/UCSC_Tables/simple_repeats_hg19.bed"
-    else:
-        logging.error('Unsupported build version: %s. Please use hg38 or hg19.', buildversion)
-        sys.exit(1)
-    logging.info('Annotating simple repeats using the BED file (GRCh38): %s', simpleRepeat_bed)
+    # simpleRepeat.
+    simpleRepeat_bed = annotation_paths['simple_repeats']
+    logging.info('Annotating simple repeats using the BED file (%s): %s', buildversion, simpleRepeat_bed)
     simpleRepeat_df = run_bedtools_intersect(input_bed, simpleRepeat_bed, training_format)
 
     # Check if record has any simple repeats (boolean indicator).
@@ -642,9 +687,9 @@ def add_annotations(data, input_bed, annovar_path, db_path, anno_outdir, buildve
     # Download the cytoband database
     cytoband_success = download_annovar_db(annovar_path, db_path, "cytoBand", buildversion)
 
-    # Set up a dictionary for each chromosome, mapping the cytoband to the
+    # Set up a dictionary for each chromosome, mapping cytobands to
     # centromere and telomere regions.
-    cytoband_file = "/home/perdomoj/github/ContextScore/data/hg38_cytoband.txt"  # Downloaded from UCSC.
+    cytoband_file = annotation_paths['cytobands']
     cytoband_dict = read_cytoband_file(cytoband_file)
 
     logging.info('Converting the true positive BED file to ANNOVAR input format.')
