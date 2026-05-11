@@ -183,10 +183,37 @@ def create_bed(input_vcf, output_bed):
     info_df['CN'] = vcf_df['INFO'].str.extract(r'CN=([^;]+)')
     info_df['ALNOFFSET'] = vcf_df['INFO'].str.extract(r'ALNOFFSET=([^;]+)')
 
+    def _extract_sample_field(row, field_name):
+        sample_value = row.get('SAMPLE')
+        if pd.isna(sample_value):
+            return np.nan
+
+        sample_parts = str(sample_value).split(':')
+        format_value = row.get('FORMAT')
+        if pd.notna(format_value):
+            format_parts = str(format_value).split(':')
+            try:
+                field_index = format_parts.index(field_name)
+            except ValueError:
+                field_index = None
+            if field_index is not None and field_index < len(sample_parts):
+                return sample_parts[field_index]
+            return np.nan
+
+        # Fallback to the original positional interpretation when FORMAT is unavailable.
+        if field_name == 'GT':
+            return sample_parts[0] if len(sample_parts) > 0 else np.nan
+        if field_name == 'DP':
+            return sample_parts[1] if len(sample_parts) > 1 else np.nan
+        return np.nan
+
     # Extract the genotype (GT) and read depth (DP) from the SAMPLE column
     sample_df = pd.DataFrame()
-    sample_df['GT'] = vcf_df['SAMPLE'].str.extract(r'([^:]+):')
-    sample_df['DP'] = vcf_df['SAMPLE'].str.extract(r':(\d+)').astype(int)
+    sample_df['GT'] = vcf_df.apply(lambda row: _extract_sample_field(row, 'GT'), axis=1)
+    sample_df['DP'] = pd.to_numeric(
+        vcf_df.apply(lambda row: _extract_sample_field(row, 'DP'), axis=1),
+        errors='coerce',
+    ).fillna(0).astype(int)
 
     # Create the BED file
     bed_df = pd.DataFrame()
