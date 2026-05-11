@@ -521,7 +521,7 @@ def download_annovar_db(annovar_path, db_path, db_name, buildversion='hg38'):
     # This ensures files are downloaded directly to the correct location
     logging.info('Running the command to download the database: %s (in directory: %s)', " ".join(cmd), db_path)
     try:
-        result = subprocess.run(" ".join(cmd), shell=True, check=True, capture_output=True, text=True, cwd=db_path)
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True, cwd=db_path)
         if result.stdout:
             logging.debug('Download stdout: %s', result.stdout)
         logging.info('Downloaded the database %s successfully.', db_name)
@@ -530,6 +530,11 @@ def download_annovar_db(annovar_path, db_path, db_name, buildversion='hg38'):
         logging.warning('Failed to download the database %s: %s', db_name, e)
         if e.stderr:
             logging.warning('Error output: %s', e.stderr)
+        logging.warning('Continuing without this database. Some features may be missing.')
+        return False
+    except FileNotFoundError as e:
+        logging.warning('Failed to download the database %s: %s', db_name, e)
+        logging.warning('Please verify ANNOVAR is installed and annovar_path is correct.')
         logging.warning('Continuing without this database. Some features may be missing.')
         return False
 
