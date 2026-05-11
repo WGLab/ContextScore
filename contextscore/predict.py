@@ -546,7 +546,7 @@ def main(argv=None):
     except ValueError as exc:
         logging.error('%s', exc)
         user_message('ANNOVAR setup is required before running prediction.')
-        user_message('Example: contextscore --input sample.vcf --output out.vcf --sample_coverage 30 --annovar /path/to/annovar --annovar-db /path/to/humandb')
+        user_message('Example: contextscore --input sample.vcf --output out.vcf --sample-coverage 30 --annovar /path/to/annovar --annovar-db /path/to/humandb')
         user_message('Optional: add --model /path/to/model.pkl to override default model resolution.')
         user_message('You can also set ANNOVAR_PATH and ANNOVAR_DB_PATH environment variables.')
         sys.exit(2)
