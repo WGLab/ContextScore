@@ -4,7 +4,7 @@ from setuptools import setup, find_packages
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 DATA_FILES = [
-    str(path)
+    path.relative_to(PROJECT_ROOT).as_posix()
     for path in (PROJECT_ROOT / "data").glob("*")
     if path.is_file()
 ]
