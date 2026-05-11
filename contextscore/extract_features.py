@@ -450,12 +450,6 @@ def run_bedtools_intersect(input_bed, table_bed, training_format=False):
                 logging.warning('Could not remove temporary normalized BED file: %s', normalized_temp_bed)
 
 
-    # Cap hmm log likelihood to avoid extreme values.
-    df['hmm_llh'] = np.clip(df['hmm_llh'], -1e6, 0)
-
-    # Update hmm_llh, set 0 to np.nan
-    df['hmm_llh'] = df['hmm_llh'].replace(0, np.nan)
-
 def bed_to_annovar_input(bed_file):
     """Convert the BED file to ANNOVAR input format."""
     output_file = bed_file.replace('.bed', '.avinput')
