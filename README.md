@@ -1,7 +1,11 @@
-# ContextScore
-Assign confidence scores to SV datasets based on coverage, genomic context, and other important alignment features
-
 [![unit tests](https://github.com/WGLab/ContextScore/actions/workflows/unit-tests.yml/badge.svg)](https://github.com/WGLab/ContextScore/actions/workflows/unit-tests.yml)
+
+# ContextScore
+<p>
+<img src="https://github.com/user-attachments/assets/03603ad1-df9d-438d-911c-81af0cf612e3" alt="ContextSV" align="left" style="width:100px;"/>
+Filtering step for the <a href="https://github.com/WGLab/ContextSV">ContextSV</a> long-read structural variant (SV) caller, utilizing a Random Forest model trained on SV validation features. Assign confidence scores to SV datasets based on coverage, genomic context, and other important alignment features, then filter low-confidence SVs to increase the precision of the final callset. Genomic context is determined from annotations using ANNOVAR and UCSC databases.
+</p>
+<br clear="left"/>
 
 ## Installation
 ```bash
@@ -12,7 +16,7 @@ mamba install -c wglab contextscore
 ```
 
 ## ANNOVAR setup
-[ANNOVAR](https://annovar.openbioinformatics.org/en/latest/user-guide/download/) is required for prediction and must be installed separately.
+[ANNOVAR](https://annovar.openbioinformatics.org/en/latest/user-guide/download/) is required for annotations and must be installed separately.
 
 These are the required ANNOVAR components for ContextScore:
 - `--annovar`: directory containing `annotate_variation.pl` and `table_annovar.pl`
