@@ -1,0 +1,14 @@
+name: contextscore
+channels:
+  - wglab
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python=3.10
+  - numpy
+  - pandas
+  - scikit-learn=1.6.1  # For consistency with model training environment
+  - joblib
+  - bedtools
+  - pytest

@@ -169,3 +169,22 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Ignore the output/ folder
+output/
+scripts/
+
+# VS Code settings
+.vscode/launch.json
+
+# Testing scripts
+linktoscripts
+truvari_results_Simulated_*/
+conda/contextscore-models/
+tests/fixtures/output.vcf.avinput
+tests/fixtures/output.vcf.bed
+tests/fixtures/annotations/features.tsv
+tests/fixtures/annotations/regions.hg38_multianno.txt
+
+# Database files
+data/
