@@ -364,7 +364,7 @@ def run_bedtools_intersect(input_bed, table_bed, training_format=False):
         try:
             subprocess.run(["bedtools", "--version"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             _BEDTOOLS_CHECKED = True
-        except subprocess.CalledProcessError:
+        except (subprocess.CalledProcessError, FileNotFoundError):
             logging.error('bedtools is not installed. Please install bedtools.')
             sys.exit(1)
 
