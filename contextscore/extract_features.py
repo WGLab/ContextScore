@@ -168,13 +168,8 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
                          names=['chrom', 'start', 'end', 'sv_type', 'sv_length', 'genotype', 'read_depth', 'hmm_llh', 'aln_type', 'cluster_size', 'cn_state', 'aln_offset', 'id'],
                          dtype={'chrom': str, 'start': np.int32, 'end': np.int32, 'sv_type': str, 'sv_length': np.int32, 'genotype': str, 'read_depth': np.int32, 'hmm_llh': np.float32, 'aln_type': str, 'cluster_size': np.int32, 'cn_state': np.int32, 'aln_offset': np.int32, 'id': np.int32})
 
-    # Ensure SV length is positive
+    # Normalize SV length to a positive magnitude.
     bed_df['sv_length'] = bed_df['sv_length'].abs()
-
-    # Throw error if any SV lengths are negative
-    if (bed_df['sv_length'] < 0).any():
-        logging.error('Negative SV lengths found in the BED file.')
-        sys.exit(1)
 
     # Drop the genotype column and cn_state columns (due to redundancy).
     bed_df.drop(columns=['genotype', 'cn_state'], inplace=True)
