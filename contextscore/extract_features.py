@@ -541,20 +541,20 @@ def annotate(annovar_input, annovar_path, db_path, output_dir, buildversion='hg3
     annotations_dir = os.path.join(output_dir, 'regions')
     logging.info('Creating the output directory: %s', annotations_dir)
     cmd = [
-        f"{annovar_path}/table_annovar.pl",
+        os.path.join(annovar_path, "table_annovar.pl"),
         annovar_input,
         db_path,
-        "--buildver " + buildversion,
+        "--buildver", buildversion,
         "--out", annotations_dir,
         "--remove",
-        "--protocol genomicSuperDups,cytoBand",
-        "--operation r,r",
-        "--nastring .",
+        "--protocol", "genomicSuperDups,cytoBand",
+        "--operation", "r,r",
+        "--nastring", ".",
         "-polish"
     ]
 
     try:
-        subprocess.run(" ".join(cmd), shell=True, check=True)
+        subprocess.run(cmd, check=True)
     except subprocess.CalledProcessError as e:
         logging.error('Error annotating: %s', e)
         logging.error('Please check the ANNOVAR path and database path.')
