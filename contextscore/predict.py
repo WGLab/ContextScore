@@ -17,6 +17,7 @@ import argparse
 import importlib
 import gzip
 import re
+import tempfile
 import numpy as np
 import joblib
 import pandas as pd
@@ -267,26 +268,26 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
     for svtype, thr in sorted(threshold_by_type.items()):
         logging.info('  %s: %.3f', svtype, thr)
 
-    # Create a BED file from the input VCF file
-    bed_file = os.path.splitext(input_vcf)[0] + '.bed'
-    skipped_chrom_ids = create_bed(input_vcf, bed_file)
-    logging.info('Created BED file: %s', bed_file)
-    if skipped_chrom_ids:
-        logging.info('Variants skipped from annotation/scoring due to unparseable CHROM: %d', len(skipped_chrom_ids))
+    output_dir = os.path.dirname(os.path.abspath(output_vcf)) or '.'
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Create temporary annotation inputs in the output location so read-only input paths work.
+    with tempfile.TemporaryDirectory(prefix='contextscore_', dir=output_dir) as temp_workdir:
+        bed_file = os.path.join(temp_workdir, f"{os.path.splitext(os.path.basename(input_vcf))[0]}.bed")
+        skipped_chrom_ids = create_bed(input_vcf, bed_file)
+        logging.info('Created BED file: %s', bed_file)
+        if skipped_chrom_ids:
+            logging.info('Variants skipped from annotation/scoring due to unparseable CHROM: %d', len(skipped_chrom_ids))
+
+        # Extract the features from the BED file.
+        anno_outdir = os.path.join(temp_workdir, 'annotations')
+        os.makedirs(anno_outdir, exist_ok=True)
+        feature_df = extract_features(bed_file, annovar_path, annovar_db_path, anno_outdir, buildver, sample_coverage=sample_coverage)
 
     # Load the model
     logging.info('Loading model from: %s', model)
     clf = joblib.load(model)
     logging.info('Model loaded successfully.')
-
-    # Extract the features from the BED file.
-    anno_outdir= os.path.dirname(bed_file)
-    anno_outdir= os.path.join(anno_outdir, 'annotations')
-    if not os.path.exists(anno_outdir):
-        os.makedirs(anno_outdir)
-        logging.info('Created output directory: %s', anno_outdir)
-
-    feature_df = extract_features(bed_file, annovar_path, annovar_db_path, anno_outdir, buildver, sample_coverage=sample_coverage)
 
     # Check if the feature extraction was successful
     if feature_df.empty:
@@ -333,8 +334,6 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
     # Run the model on the features
     logging.info('Running the model on the features...')
     y_pred = clf.predict_proba(feature_df)
-
-    output_dir = os.path.dirname(os.path.abspath(output_vcf)) or '.'
 
     # Save per-variant probabilities for downstream threshold tuning.
     predictions_tsv = os.path.join(output_dir, 'predictions.tsv')

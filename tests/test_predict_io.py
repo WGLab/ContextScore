@@ -107,6 +107,7 @@ def test_vcf_gz_svtype_counts():
 
 def test_score_generates_outputs_in_tests_output(monkeypatch):
     _prepare_output_dir()
+    input_bed_path = FIXTURE_VCF_GZ.with_suffix('.bed')
     monkeypatch.setattr(predict, 'extract_features', _fake_extract_features)
     monkeypatch.setattr(predict.joblib, 'load', lambda model_path: DummyModel())
 
@@ -128,6 +129,7 @@ def test_score_generates_outputs_in_tests_output(monkeypatch):
     assert REMOVED_VCF.exists()
     assert PREDICTIONS_TSV.exists()
     assert FILTERED_IDS.exists()
+    assert not input_bed_path.exists()
 
     predictions_df = pd.read_csv(PREDICTIONS_TSV, sep='\t')
     kept_records = _count_vcf_records(FILTERED_VCF)
