@@ -7,11 +7,24 @@ Assign confidence scores to SV datasets based on coverage, genomic context, and 
 ```bash
 conda install -c wglab -c bioconda -c conda-forge contextscore
 
-# Or using mamba (faster than conda for large environments)
+# Or using mamba (faster dependency resolution):
 mamba install -c wglab contextscore
 ```
 
-## Sources for annotation files used in the model (under data/ directory):
+## ANNOVAR setup
+[ANNOVAR](https://annovar.openbioinformatics.org/en/latest/user-guide/download/) is required for prediction and must be installed separately.
+
+These are the required ANNOVAR components for ContextScore:
+- `--annovar`: directory containing `annotate_variation.pl` and `table_annovar.pl`
+- `--annovar-db`: ANNOVAR database directory
+
+## User Workflow
+```bash
+contextscore --input input.vcf --output scored.vcf --sample-coverage 30 --buildver {hg38,hg19} --threshold 0.2 \
+	--annovar /path/to/annovar --annovar-db /path/to/humandb
+```
+
+## Sources for additional annotations (under `data/` directory):
 | File | Source | Description | Link |
 | --- | --- | --- | --- |
 | `cytobands_hg{19,38}.txt` | UCSC Genome Browser | Cytoband annotations for human genome builds hg19 and hg38 | [UCSC hg19](https://hgdownload.soe.ucsc.edu/goldenPath/hg19/database/cytoBand.txt.gz) / [UCSC hg38](https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/cytoBand.txt.gz) |
@@ -20,23 +33,3 @@ mamba install -c wglab contextscore
 | `simple_repeats_hg{19,38}.bed` | UCSC Genome Browser | Simple repeat annotations for human genome builds hg19 and hg38 | [UCSC hg19](https://hgdownload.soe.ucsc.edu/goldenPath/hg19/database/simpleRepeat.txt.gz) / [UCSC hg38](https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/simpleRepeat.txt.gz) |
 | `fragile_sites_hg38.bed` / `fragile_sites_hg19_liftover.bed` | [HumCFS](https://webs.iiitd.edu.in/raghava/humcfs/download.html) | Fragile site annotations for human genome builds hg38 and hg19 (liftover) | [HumCFS](https://webs.iiitd.edu.in/raghava/humcfs/fragile_site_bed.zip) |
 
-## User Workflow
-```bash
-contextscore --input input.vcf --output scored.vcf --model full_model.pkl --sample_coverage 30 \
-	--annovar /path/to/annovar --annovar-db /path/to/humandb
-```
-
-ANNOVAR is required for prediction and must be installed separately.
-
-You can provide ANNOVAR locations using flags:
-
-- `--annovar`: directory containing `annotate_variation.pl` and `table_annovar.pl`
-- `--annovar-db`: ANNOVAR database directory
-
-Or using environment variables:
-
-```bash
-export ANNOVAR_PATH=/path/to/annovar
-export ANNOVAR_DB_PATH=/path/to/humandb
-contextscore --input input.vcf --output scored.vcf --model full_model.pkl --sample_coverage 30
-```
