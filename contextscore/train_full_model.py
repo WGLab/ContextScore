@@ -13,13 +13,9 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection import GridSearchCV, StratifiedKFold
-from xgboost import XGBClassifier
 from sklearn.svm import SVC
 
 from sklearn.metrics import roc_curve, auc
-
-import matplotlib.pyplot as plt
-import seaborn as sns
 
 try:
     from .extract_features import extract_features
@@ -352,6 +348,12 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
 
     # If not 80/20 split, use XGBoost and Random Forest only (highest performing models) to save time.
     if split_80_20:
+        try:
+            from xgboost import XGBClassifier
+        except ImportError as exc:
+            raise ImportError(
+                'xgboost is required when --split-80-20 is enabled. Install xgboost to train with this option.'
+            ) from exc
         pipelines = {
             "Random_Forest": Pipeline([('classifier', RandomForestClassifier(n_estimators=100, random_state=42))]),
             "XGBoost": Pipeline([('classifier', XGBClassifier(n_estimators=100, eval_metric='logloss', random_state=42, enable_categorical=False))])
@@ -473,6 +475,13 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
 
         # Plot the F1 scores for each model and chromosome (one plot per model).
         logging.info('Plotting the scores for each model and chromosome.')
+        try:
+            import matplotlib.pyplot as plt
+            import seaborn as sns
+        except ImportError as exc:
+            raise ImportError(
+                'matplotlib and seaborn are required for per-chromosome validation plots.'
+            ) from exc
         metrics = ['F1 Score', 'Precision', 'Recall']
         for model_name in pipelines.keys():
 
@@ -545,6 +554,12 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
 
             # Save plots only for 80-20 split since the ROC curve will be overly optimistic when using all the data for training and testing.
             if split_80_20:
+                try:
+                    import matplotlib.pyplot as plt
+                except ImportError as exc:
+                    raise ImportError(
+                        'matplotlib is required when --split-80-20 is enabled to generate ROC plots.'
+                    ) from exc
                 y_train_prob = best_model.predict_proba(X_train_processed)[:, 1]
                 y_test_prob = best_model.predict_proba(X_test_processed)[:, 1]
 
@@ -608,6 +623,8 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
                 # For Random Forest, use both native importance and SHAP (with aggressive sampling)
                 if model_name == 'Random_Forest':
                     try:
+                        import matplotlib.pyplot as plt
+
                         # 1. Native Random Forest feature importance (instant)
                         feature_importances = classifier.feature_importances_
                         feature_names = X_train.columns.tolist()
@@ -788,4 +805,3 @@ if __name__ == '__main__':
     logging.info('Training the model, split_80_20 = %s, leave_out = %s, per_chr_validation = %s', args.split_80_20, args.leave_out, args.per_chr_validation)
     train(args.tp_hg002_grch37, args.fp_hg002_grch37, args.tp_visor_grch38, args.fp_visor_grch38, args.tp_na12877_grch38, args.fp_na12877_grch38, args.tp_na12878_grch38, args.fp_na12878_grch38, args.tp_na12879_grch38, args.fp_na12879_grch38, args.outdir, args.annovar, args.annovar_db, args.outdiranno, args.leave_out, args.split_80_20, args.per_chr_validation, args.sample_coverage_hg002, args.sample_coverage_visor, args.sample_coverage_na12877, args.sample_coverage_na12878, args.sample_coverage_na12879)
     logging.info('done.')
-
