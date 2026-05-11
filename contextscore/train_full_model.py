@@ -1,25 +1,5 @@
 """
-train_model.py - Train the binary classification model.
-
-Usage:
-    python train_model.py <true_positives_filepath> <false_positives_filepath>
-    <output_directory>
-    
-    true_positives_filepath: Path to the VCF of true positive SV calls obtained
-        from a benchmarking dataset.
-    false_positives_filepath: Path to the VCF of false positive SV calls
-        obtained from running the caller on data that is known to be negative
-        for SVs. This data can be obtained by running the caller on a normal
-        sample with known SVs accounted for in the reference genome.
-
-    output_directory: Path to the output directory.
-
-Output:
-    model.pkl: The binary classification model.
-
-Example:
-    python train_model.py data/sv_scoring_dataset/true_positives.vcf
-    sv_scoring_dataset/false_positives.vcf data/sv_scoring_dataset/model
+train_model.py - Train the binary classification model and evaluate using per-chromosome cross-validation and 80/20 train/test split.
 """
 
 import os
@@ -313,11 +293,6 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
     fp_count_after = fp_data.shape[0]
     logging.info('Removed %d tp duplicates and %d fp duplicates from the concatenated data. Remaining true positives: %d, remaining false positives: %d', tp_count_before - tp_count_after, fp_count_before - fp_count_after, tp_data.shape[0], fp_data.shape[0])
 
-    # Drop SV length features since they are highly correlated with the SV type feature and may lead to overfitting.
-    # logging.info('Dropping SV length feature from the data.')
-    # tp_data = tp_data.drop(columns=['sv_length'], errors='ignore')
-    # fp_data = fp_data.drop(columns=['sv_length'], errors='ignore')
-
     # Add the labels.
     tp_data['label'] = 1
     fp_data['label'] = 0
@@ -382,9 +357,6 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
             "XGBoost": Pipeline([('classifier', XGBClassifier(n_estimators=100, eval_metric='logloss', random_state=42, enable_categorical=False))])
         }
         # pipelines = {
-        #     "Random_Forest": Pipeline([('classifier', RandomForestClassifier(n_estimators=100, random_state=42, class_weight='balanced'))]),
-        # }
-        # pipelines = {
         #     "Logistic_Regression": Pipeline([('classifier', LogisticRegression(max_iter=1000, random_state=42))]),
         #     "Random_Forest": Pipeline([('classifier', RandomForestClassifier(n_estimators=100, random_state=42))]),
         #     "XGBoost": Pipeline([('classifier', XGBClassifier(n_estimators=100, eval_metric='logloss', random_state=42, enable_categorical=False))])
@@ -393,10 +365,6 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
         pipelines = {
             "Random_Forest": Pipeline([('classifier', RandomForestClassifier(n_estimators=100, random_state=42, class_weight='balanced'))]),
         }
-        # pipelines = {
-        #     "Random_Forest": Pipeline([('classifier', RandomForestClassifier(n_estimators=100, random_state=42))]),
-        #     "XGBoost": Pipeline([('classifier', XGBClassifier(n_estimators=100, eval_metric='logloss', random_state=42, enable_categorical=False))])
-        # }
 
     param_grids = {
         "Logistic_Regression": {
@@ -424,8 +392,7 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
         # ======================================================
         logging.info('Evaluating the model using per-chromosome cross-validation.')
 
-        # 4 August 2025: Remove chrY from the analysis. More than half is missing in
-        # GRCh38 and leads to high false positive rates.
+        # Remove chrY from the analysis. More than half is missing in GRCh38 and leads to high false positive rates.
         chromosomes = ['chr1', 'chr2', 'chr3', 'chr4', 'chr5', 'chr6', 'chr7', 'chr8', 'chr9', 'chr10',
                     'chr11', 'chr12', 'chr13', 'chr14', 'chr15', 'chr16', 'chr17', 'chr18', 'chr19', 'chr20', 'chr21', 'chr22', 'chrX']
 
@@ -446,10 +413,6 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
                 y_train_chrom = labels[chrom_col != chrom].copy()
                 X_test_chrom = features[chrom_col == chrom].copy()
                 y_test_chrom = labels[chrom_col == chrom].copy()
-
-                # Drop the chromosome column from the features.
-                # X_train_chrom.drop(columns=['chrom'], inplace=True)
-                # X_test_chrom.drop(columns=['chrom'], inplace=True)
 
                 logging.info('Training set size: %d, Testing set size: %d',
                             X_train_chrom.shape[0], X_test_chrom.shape[0])
@@ -484,6 +447,7 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
 
                 # Get the predicted probabilities for the testing set.
                 y_test_chrom_prob = best_model.predict_proba(X_test_chrom_processed)[:, 1]
+
                 # Compute the ROC curve and ROC area for the testing set.
                 fpr_chrom, tpr_chrom, _ = roc_curve(y_test_chrom, y_test_chrom_prob)
                 roc_auc_chrom = auc(fpr_chrom, tpr_chrom)
@@ -515,14 +479,11 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
             # Save a plot with F1, Precision, and Recall scores for chrY
             if 'chrY' in chromosomes:
                 logging.info('Plotting scores for %s model on chrY.', model_name)
+
                 # Create a bar plot for the F1 scores by chromosome.
                 chry_f1 = f1_scores.get((model_name, 'chrY'), 0)
                 chry_precision = precision_scores.get((model_name, 'chrY'), 0)
                 chry_recall = recall_scores.get((model_name, 'chrY'), 0)
-
-                # plt.figure(figsize=(10, 6))
-
-                # Make it way smaller for better visibility.
                 plt.figure(figsize=(6, 4))
 
                 # Plot F1, Precision, and Recall scores for chrY.
@@ -542,28 +503,15 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
             for metric, scores in zip(metrics, [f1_scores, precision_scores, recall_scores]):
                 logging.info('Plotting %s for %s model by chromosome.', metric, model_name)
                 # Create a bar plot for the F1 scores by chromosome.
-                # model_f1_scores = {chrom: f1_scores[(model_name, chrom)] for chrom
-                # in chromosomes if (model_name, chrom) in f1_scores}
                 model_scores = {chrom: scores[(model_name, chrom)] for chrom in chromosomes if (model_name, chrom) in scores}
-
                 plt.figure(figsize=(10, 6))
-                # Smaller figure size for better visibility.
-                # plt.figure(figsize=(8, 5))
                 ax = sns.barplot(x=list(model_scores.keys()), y=list(model_scores.values()), color='black')
-
-                # Annotate each bar with the number of SVs in the training set for that
-                # chromosome.
-                # Put the number of SVs above each bar.
-                # for i, (chrom, score) in enumerate(model_scores.items()):
-                #     num_sv = sv_counts[chrom]
-                #     ax.text(i, score + 0.01, f'{num_sv}', ha='center', va='bottom', fontsize=8)
 
                 plt.xlabel('Chromosome')
                 plt.ylabel(metric)
                 plt.title('%s for %s Model by Chromosome' % (metric, model_name))
                 plt.xticks(rotation=45)
                 plt.tight_layout()
-                # Save the plot to the output directory.
                 score_plot_path = os.path.join(output_directory, model_name + '_%s_by_chromosome.svg' % metric.lower().replace(' ', '_'))
                 plt.savefig(score_plot_path)
                 plt.close()

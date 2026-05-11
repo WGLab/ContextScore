@@ -159,7 +159,6 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
         logging.info('Prediction format detected.')
 
     # Read in the BED file.
-    # Prediction BED files are written without a header row.
     if training_format:
         bed_df = pd.read_csv(input_bed, sep='\t', header=None, usecols=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
                          names=['chrom', 'start', 'end', 'sv_type', 'sv_length', 'genotype', 'read_depth', 'hmm_llh', 'aln_type', 'cluster_size', 'cn_state', 'aln_offset'],
@@ -184,7 +183,6 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
     # CIGAR), 1 for CIGARCLIP (contains CIGARCLIP), 2 for SPLIT alignment (all
     # others)
     bed_df['call_type'] = bed_df['aln_type'].apply(lambda x: 1 if 'CIGARCLIP' in x else (0 if 'CIGAR' in x else 2))
-    # Change call type to categorical.
     bed_df['call_type'] = bed_df['call_type'].astype('category')
 
     # Drop the original aln_type column.
@@ -205,14 +203,7 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
         bed_df['read_depth']
     )
 
-    # Keep sv_length temporarily for later distance normalization
-    # Will be dropped after all normalized features are created
-
-    # Print the number of NaN values
-    logging.info('Number of NaN values after aln_type mapping: %d', bed_df.isnull().sum().sum())
-
-    # Create a map of SV types to numbers.
-    # SV types are: "DEL", "DUP", "INV", "INS", "BND", "UNKNOWN"
+    # Map of SV types to integers
     sv_type_map = {
         'DEL': 0,
         'DUP': 1,
@@ -221,13 +212,10 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
         'BND': 4,
         'UNKNOWN': 5
     }
-
     bed_df['sv_type_str'] = bed_df['sv_type'].astype(str)
-
-    # Map the SV types to numbers.
     bed_df['sv_type'] = bed_df['sv_type'].map(sv_type_map).astype('category')
 
-    # Check if any features are missing.
+    # Check for missing features
     if bed_df.isnull().values.any():
         logging.error('Features are missing.')
 
@@ -258,11 +246,8 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
     bed_df = bed_df.drop(columns=['cn_state'], errors='ignore')
 
     # Add distance to nearest other SV call, clustered false positives often appear near real SVs.
-    # Vectorized by chromosome to avoid row-wise apply.
     logging.info('Computing distance to nearest other SV call (same chromosome)...')
-    logging.info('Applying distance calculation to all rows...')
     bed_df['dist_to_nearest_sv'] = np.nan
-
     for chrom, idx in bed_df.groupby('chrom', sort=False).groups.items():
         chrom_df = bed_df.loc[idx, ['start', 'end']].sort_values(['start', 'end'])
         n = chrom_df.shape[0]
@@ -317,16 +302,6 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
         bed_df['dist_to_nearest_sv'] / (bed_df['sv_length'] / 1000.0),
         bed_df['dist_to_nearest_sv']
     )
-
-    # Now drop sv_length since all normalizations are complete
-    # bed_df.drop(columns=['sv_length'], inplace=True)
-
-    # Save the first 500 features to a new file.
-    features_file = os.path.join(outdiranno, 'features.tsv')
-    logging.info('Saving the features to %s', features_file)
-    # Save only the first 500 rows to avoid saving too many records.
-    bed_df.head(500).to_csv(features_file, sep='\t', index=False)
-    logging.info('Saved the features to %s', features_file)
 
     # Return the features dataframe.
     return bed_df
@@ -480,7 +455,6 @@ def run_bedtools_intersect(input_bed, table_bed, training_format=False):
                 logging.warning('Could not remove temporary normalized BED file: %s', normalized_temp_bed)
 
 
-    # Post-processing the features:
     # Cap hmm log likelihood to avoid extreme values.
     df['hmm_llh'] = np.clip(df['hmm_llh'], -1e6, 0)
 
@@ -506,9 +480,9 @@ def bed_to_annovar_input(bed_file):
     # 3. End position
     # 4. Reference allele
     # 5. Alternate allele
-    # We will use the first three columns from the BED file and add two dummy
+    # We will use the first three columns from the BED file and placeholder
     # columns for the reference and alternate alleles (0, and -) since gnomAD does not
-    # provide the sequence information for the SVs.
+    # provide sequence information
 
     # Create a new dataframe with the required columns.
     annovar_df = pd.DataFrame()
@@ -609,11 +583,10 @@ def get_cytoband_is_c_t(chrom_dict, chrom, cytoband):
     is_centromere = False
     # Check if the cytoband annotation indicates telomere or centromere regions.
     try:
-        # Centromeres contain 'acen' in their names.
+        # Centromeres contain 'acen'
         if 'acen' in cytoband:
             is_centromere = True
         # Telomeres are at the extreme bands - simplistic check for p/q terminal regions
-        # (This is a simplified heuristic; a more robust method would use actual position data)
         elif 'p11' in cytoband or 'p12' in cytoband or 'p13' in cytoband:  # p-arm terminal
             is_telomere = True
         elif 'q13' in cytoband or 'q14' in cytoband:  # q-arm terminal (varies by chromosome)
@@ -621,7 +594,6 @@ def get_cytoband_is_c_t(chrom_dict, chrom, cytoband):
 
     except TypeError:
         pass
-        # Handle the case where cytoband is not a string.
 
     return is_telomere, is_centromere
 
@@ -679,7 +651,7 @@ def add_annotations(data, input_bed, annovar_path, db_path, anno_outdir, buildve
     logging.info('Total number of records: %d', data.shape[0])
 
     # ---------------------------------------------------------------
-    # Annotate the SVs using ANNOVAR.
+    # Annotate using ANNOVAR.
     
     # Download the segmental duplication database
     segdup_success = download_annovar_db(annovar_path, db_path, "genomicSuperDups", buildversion)

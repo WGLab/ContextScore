@@ -10,14 +10,13 @@ def download_ucsc(table_name: str,
     Note: This function requires access to the UCSC MySQL database.
     """
     print("Downloading UCSC " + table_name + " table for " + genome_version + "...")
+    
     # Connect to UCSC MySQL database
     conn = pymysql.connect(host="genome-mysql.soe.ucsc.edu",
                         user="genome",
                         password="",
                         database="hg38")  # Change to the desired genome version (e.g., hg19, mm10)
 
-    # Query the simpleRepeat table
-    # query = "SELECT * FROM simpleRepeat;"  # Adjust query as needed
     query = f"""
     SELECT
         chrom AS chr, 
@@ -60,4 +59,3 @@ if __name__ == "__main__":
     download_ucsc(table_name="phastCons100way",
                  genome_version="hg38",
                  output_file=phastcons_file)
-    
