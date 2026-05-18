@@ -324,7 +324,7 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
 
     # Drop columns that are not needed for training.
     # Keep normalized *_per_kb features; remove raw versions.
-    data = data.drop(columns=['start', 'end', 'sv_type_str', 'cluster_size', 'dist_to_nearest_sv', 'read_depth'], errors='ignore')
+    data = data.drop(columns=['start', 'end', 'sv_type_str', 'cluster_size', 'dist_to_nearest_sv', 'read_depth', 'sv_length'], errors='ignore')
 
     logging.info('Columns list after preprocessing: %s', data.columns.tolist())
 

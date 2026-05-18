@@ -313,7 +313,7 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
     
     # Remove other non-feature columns before prediction.
     # Keep normalized *_per_kb features; remove raw versions.
-    for col in ['chrom', 'start', 'end', 'sv_type_str', 'cluster_size', 'dist_to_nearest_sv', 'read_depth']:
+    for col in ['chrom', 'start', 'end', 'sv_type_str', 'cluster_size', 'dist_to_nearest_sv', 'read_depth', 'sv_length']:
         if col in feature_df.columns:
             feature_df.pop(col)
     
