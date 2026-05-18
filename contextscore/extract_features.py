@@ -241,62 +241,62 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
     bed_df = bed_df.drop(columns=['cn_state'], errors='ignore')
 
     # Add distance to nearest other SV call, clustered false positives often appear near real SVs.
-    logging.info('Computing distance to nearest other SV call (same chromosome)...')
-    bed_df['dist_to_nearest_sv'] = np.nan
-    for chrom, idx in bed_df.groupby('chrom', sort=False).groups.items():
-        chrom_df = bed_df.loc[idx, ['start', 'end']].sort_values(['start', 'end'])
-        n = chrom_df.shape[0]
+    # logging.info('Computing distance to nearest other SV call (same chromosome)...')
+    # bed_df['dist_to_nearest_sv'] = np.nan
+    # for chrom, idx in bed_df.groupby('chrom', sort=False).groups.items():
+    #     chrom_df = bed_df.loc[idx, ['start', 'end']].sort_values(['start', 'end'])
+    #     n = chrom_df.shape[0]
 
-        if n <= 1:
-            continue
+    #     if n <= 1:
+    #         continue
 
-        starts = chrom_df['start'].to_numpy(dtype=np.int64)
-        ends = chrom_df['end'].to_numpy(dtype=np.int64)
+    #     starts = chrom_df['start'].to_numpy(dtype=np.int64)
+    #     ends = chrom_df['end'].to_numpy(dtype=np.int64)
 
-        # Previous interval summary.
-        prev_max_end = np.maximum.accumulate(ends)
-        prev_max_end_excl = np.empty(n, dtype=np.int64)
-        prev_max_end_excl[0] = np.iinfo(np.int64).min
-        prev_max_end_excl[1:] = prev_max_end[:-1]
+    #     # Previous interval summary.
+    #     prev_max_end = np.maximum.accumulate(ends)
+    #     prev_max_end_excl = np.empty(n, dtype=np.int64)
+    #     prev_max_end_excl[0] = np.iinfo(np.int64).min
+    #     prev_max_end_excl[1:] = prev_max_end[:-1]
 
-        # Next interval summary.
-        next_start_excl = np.empty(n, dtype=np.int64)
-        next_start_excl[:-1] = starts[1:]
-        next_start_excl[-1] = np.iinfo(np.int64).max
+    #     # Next interval summary.
+    #     next_start_excl = np.empty(n, dtype=np.int64)
+    #     next_start_excl[:-1] = starts[1:]
+    #     next_start_excl[-1] = np.iinfo(np.int64).max
 
-        # Overlap checks with prior/next intervals.
-        overlap_prev = prev_max_end_excl > starts
-        overlap_next = ends > next_start_excl
-        overlap_any = overlap_prev | overlap_next
+    #     # Overlap checks with prior/next intervals.
+    #     overlap_prev = prev_max_end_excl > starts
+    #     overlap_next = ends > next_start_excl
+    #     overlap_any = overlap_prev | overlap_next
 
-        # Gap to closest left/right neighbor (touching intervals yield 0).
-        left_gap = starts - prev_max_end_excl
-        right_gap = next_start_excl - ends
+    #     # Gap to closest left/right neighbor (touching intervals yield 0).
+    #     left_gap = starts - prev_max_end_excl
+    #     right_gap = next_start_excl - ends
 
-        # No-left/no-right sentinels.
-        left_gap[0] = np.iinfo(np.int64).max
-        right_gap[-1] = np.iinfo(np.int64).max
+    #     # No-left/no-right sentinels.
+    #     left_gap[0] = np.iinfo(np.int64).max
+    #     right_gap[-1] = np.iinfo(np.int64).max
 
-        nearest = np.minimum(left_gap, right_gap).astype(np.float64)
-        nearest[overlap_any] = 0.0
+    #     nearest = np.minimum(left_gap, right_gap).astype(np.float64)
+    #     nearest[overlap_any] = 0.0
 
-        # Any remaining sentinel values are undefined (should only happen in degenerate cases).
-        sentinel = float(np.iinfo(np.int64).max)
-        nearest[nearest >= sentinel] = np.nan
+    #     # Any remaining sentinel values are undefined (should only happen in degenerate cases).
+    #     sentinel = float(np.iinfo(np.int64).max)
+    #     nearest[nearest >= sentinel] = np.nan
 
-        bed_df.loc[chrom_df.index, 'dist_to_nearest_sv'] = nearest
+    #     bed_df.loc[chrom_df.index, 'dist_to_nearest_sv'] = nearest
 
-    logging.info('Distance to nearest SV calculated. Coverage: %.1f%%', (bed_df['dist_to_nearest_sv'].notna().sum() / len(bed_df) * 100))
+    # logging.info('Distance to nearest SV calculated. Coverage: %.1f%%', (bed_df['dist_to_nearest_sv'].notna().sum() / len(bed_df) * 100))
 
-    # Print statistics about the distance to nearest SV feature.
-    logging.info('Distance to nearest SV - mean: %.2f, median: %.2f, std: %.2f', bed_df['dist_to_nearest_sv'].mean(), bed_df['dist_to_nearest_sv'].median(), bed_df['dist_to_nearest_sv'].std())
+    # # Print statistics about the distance to nearest SV feature.
+    # logging.info('Distance to nearest SV - mean: %.2f, median: %.2f, std: %.2f', bed_df['dist_to_nearest_sv'].mean(), bed_df['dist_to_nearest_sv'].median(), bed_df['dist_to_nearest_sv'].std())
 
-    # Normalize by SV size
-    bed_df['dist_nearest_sv_per_kb'] = np.where(
-        bed_df['sv_length'] > 0,
-        bed_df['dist_to_nearest_sv'] / (bed_df['sv_length'] / 1000.0),
-        bed_df['dist_to_nearest_sv']
-    )
+    # # Normalize by SV size
+    # bed_df['dist_nearest_sv_per_kb'] = np.where(
+    #     bed_df['sv_length'] > 0,
+    #     bed_df['dist_to_nearest_sv'] / (bed_df['sv_length'] / 1000.0),
+    #     bed_df['dist_to_nearest_sv']
+    # )
 
     # Return the features dataframe.
     return bed_df

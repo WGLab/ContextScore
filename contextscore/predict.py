@@ -239,7 +239,7 @@ def create_bed(input_vcf, output_bed):
 
 def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
           threshold_del=None, threshold_dup=None, threshold_ins=None, threshold_inv=None,
-          sample_coverage=None, large_cutoff=10000, annovar_path=None, annovar_db_path=None,
+          sample_coverage=None, annovar_path=None, annovar_db_path=None,
           debug_plot=False):
     """Score the structural variants using the binary classification model.
 
@@ -253,7 +253,6 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
         threshold_ins (float): Optional. Threshold for INS variants. If None, uses default threshold.
         threshold_inv (float): Optional. Threshold for INV variants. If None, uses default threshold.
         sample_coverage (float): Required. Mean read depth coverage for the sample.
-        large_cutoff (int): SV size cutoff in bp; variants larger than this are always kept (default: 50000).
     """
     # Build threshold dictionary with type-specific values
     threshold_by_type = {
@@ -438,12 +437,19 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
                 # Get the appropriate threshold for this SV type
                 type_threshold = threshold_by_type.get(svtype, prob_threshold)
                 
-                # Determine if variant should be kept
-                is_large_sv = svlen_match is not None and abs(svlen_match) > large_cutoff
-                passes_threshold = confidence_score >= type_threshold
-                
-                # Keep if: (large SV) OR (passes type-specific threshold)
-                should_keep = is_large_sv or passes_threshold
+                # Determine if variant should be kept. 0.5*threshold for >10kb, >50kb, and >100kb SVs
+                abs_svlen = abs(svlen_match)
+                if abs_svlen > 100000:
+                    type_threshold = 0.5 * type_threshold  # Relax threshold for large SVs
+
+                # if abs_svlen > 10000:
+                #     type_threshold = 0.5 * type_threshold  # Relax threshold for larger SVs
+                #     if abs_svlen > 50000:
+                #         type_threshold = 0.5 * type_threshold  # Further relax for very large SVs
+                #         if abs_svlen > 100000:
+                #             type_threshold = 0.5 * type_threshold  # Further relax for extremely large SVs
+                    
+                should_keep = confidence_score >= type_threshold
                 
                 # Track statistics by type
                 if svtype not in type_filter_stats:
@@ -506,8 +512,6 @@ def main(argv=None):
                         help='Threshold for INV variants (default: uses --threshold value).')
     parser.add_argument('--sample-coverage', type=float, required=True,
                         help='Mean read depth coverage for the sample (required, used to normalize read_depth).')
-    parser.add_argument('--large-cutoff', type=int, default=10000,
-                        help='SV size cutoff in bp; variants larger than this are always kept (default: 50000).')
     parser.add_argument('--annovar', type=str, default=None,
                         help='Path to ANNOVAR installation directory. Can also be set via ANNOVAR_PATH.')
     parser.add_argument('--annovar-db', type=str, default=None,
@@ -584,7 +588,7 @@ def main(argv=None):
                     threshold=args.threshold, sample_coverage=args.sample_coverage,
                     threshold_del=args.threshold_del, threshold_dup=args.threshold_dup,
                     threshold_ins=args.threshold_ins, threshold_inv=args.threshold_inv,
-                    large_cutoff=args.large_cutoff, annovar_path=annovar_path,
+                    annovar_path=annovar_path,
                     annovar_db_path=annovar_db_path,
                     debug_plot=args.debug_plot)
 
