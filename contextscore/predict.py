@@ -320,9 +320,9 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
     })
     predictions_meta['sv_length_abs'] = predictions_meta['sv_length'].abs()
     
-    # Remove other non-feature columns before prediction.
-    # Keep normalized *_per_kb features; remove raw versions.
-    for col in ['chrom', 'start', 'end', 'sv_type_str', 'cluster_size', 'dist_to_nearest_sv', 'read_depth', 'sv_length']:
+    # Remove non-feature columns before prediction.
+    # Keep normalized *_per_kb features and keep raw sv_length for length-aware models.
+    for col in ['chrom', 'start', 'end', 'sv_type_str', 'cluster_size', 'dist_to_nearest_sv', 'read_depth']:
         if col in feature_df.columns:
             feature_df.pop(col)
     
