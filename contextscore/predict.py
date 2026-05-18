@@ -303,6 +303,11 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
         'end': pd.to_numeric(feature_df['end'], errors='coerce').astype('Int64').values if 'end' in feature_df.columns else pd.Series([pd.NA] * len(id_col), dtype='Int64').values,
         'sv_type_str': feature_df['sv_type_str'].astype(str).values if 'sv_type_str' in feature_df.columns else np.nan,
         'sv_length': pd.to_numeric(feature_df['sv_length'], errors='coerce').astype('Int64').values if 'sv_length' in feature_df.columns else pd.Series([pd.NA] * len(id_col), dtype='Int64').values,
+        # Only the 4 non-type-specific interval features
+        'svlen_50_500': feature_df['svlen_50_500'].values if 'svlen_50_500' in feature_df.columns else np.nan,
+        'svlen_500_5000': feature_df['svlen_500_5000'].values if 'svlen_500_5000' in feature_df.columns else np.nan,
+        'svlen_5000_50000': feature_df['svlen_5000_50000'].values if 'svlen_5000_50000' in feature_df.columns else np.nan,
+        'svlen_50000_plus': feature_df['svlen_50000_plus'].values if 'svlen_50000_plus' in feature_df.columns else np.nan,
     })
     predictions_meta['sv_length_abs'] = predictions_meta['sv_length'].abs()
     
