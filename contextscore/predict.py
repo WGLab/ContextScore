@@ -237,6 +237,11 @@ def create_bed(input_vcf, output_bed):
     logging.info('Created BED file: %s', output_bed)
     return skipped_chrom_ids
 
+def add_confidence_to_info(line, confidence_score):
+    fields = line.rstrip('\n').split('\t')
+    fields[7] += f';CONFSCORE={confidence_score:.4f}'
+    return '\t'.join(fields) + '\n'
+
 def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
           threshold_del=None, threshold_dup=None, threshold_ins=None, threshold_inv=None,
           sample_coverage=None, annovar_path=None, annovar_db_path=None,
@@ -395,6 +400,10 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
     with open_vcf_text(input_vcf) as vcf_in, open(output_vcf, 'w', encoding='utf-8') as vcf_out, open(removed_svs_vcf, 'w', encoding='utf-8') as removed_out:
         for line in vcf_in:
             if line.startswith('#'):
+                # Add CONFSCORE INFO header before the #CHROM line
+                if line.startswith('#CHROM'):
+                    vcf_out.write('##INFO=<ID=CONFSCORE,Number=1,Type=Float,Description="ContextScore assigned confidence score">\n')
+
                 # Write the header lines as they are
                 vcf_out.write(line)
                 removed_out.write(line)
@@ -422,7 +431,7 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
                         type_filter_stats[svtype_for_stats] = {'total': 0, 'kept': 0, 'filtered': 0}
                     type_filter_stats[svtype_for_stats]['total'] += 1
                     type_filter_stats[svtype_for_stats]['kept'] += 1
-                    vcf_out.write(line)
+                    vcf_out.write(add_confidence_to_info(line, -1.0))
                     pass_count += 1
                     total_records += 1
                     current_record += 1
@@ -444,8 +453,13 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
                 
                 # Determine if variant should be kept. 0.5*threshold for >10kb, >50kb, and >100kb SVs
                 abs_svlen = abs(svlen_match)
-                if abs_svlen > 100000:
-                    type_threshold = 0.5 * type_threshold  # Relax threshold for large SVs
+                # if abs_svlen > 10000 and svtype in ['DEL', 'INS', 'DUP']:
+                #     type_threshold = 0.1  # Lower threshold for larger DEL and INS variants
+
+                should_keep = confidence_score >= type_threshold
+
+                # if abs_svlen > 50000:
+                #     type_threshold = 0.1 * type_threshold  # Further relax for very large SVs
 
                 # if abs_svlen > 10000:
                 #     type_threshold = 0.5 * type_threshold  # Relax threshold for larger SVs
@@ -453,8 +467,12 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
                 #         type_threshold = 0.5 * type_threshold  # Further relax for very large SVs
                 #         if abs_svlen > 100000:
                 #             type_threshold = 0.5 * type_threshold  # Further relax for extremely large SVs
-                    
-                should_keep = confidence_score >= type_threshold
+                
+                # For non-deletions, keep all SVs >50kb regardless of confidence score
+                # if svtype != 'DEL':
+                #     should_keep = confidence_score >= type_threshold or (abs_svlen is not None and abs_svlen > 50000)
+                # else:
+                #     should_keep = confidence_score >= type_threshold
                 
                 # Track statistics by type
                 if svtype not in type_filter_stats:
@@ -462,12 +480,12 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
                 type_filter_stats[svtype]['total'] += 1
                 
                 if should_keep:
-                    vcf_out.write(line)
+                    vcf_out.write(add_confidence_to_info(line, confidence_score))
                     pass_count += 1
                     type_filter_stats[svtype]['kept'] += 1
                 else:
                     # Write the line to the removed_svs.vcf file if filtered
-                    removed_out.write(line)
+                    removed_out.write(add_confidence_to_info(line, confidence_score))
                     filter_count += 1
                     type_filter_stats[svtype]['filtered'] += 1
 
