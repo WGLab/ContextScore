@@ -43,7 +43,11 @@ FEATURE_DISPLAY_NAMES = {
     'fragile_site': 'Fragile-site overlap',
     'phastCons': 'phastCons score',
     'hmm_llh': 'HMM log-likelihood',
-    'aln_offset': 'Alignment offset'
+    'aln_offset': 'Alignment offset',
+    'svlen_50_500': 'SV length 50-500bp',
+    'svlen_500_5000': 'SV length 500-5,000bp',
+    'svlen_5000_50000': 'SV length 5,000-50,000bp',
+    'svlen_50000_plus': 'SV length ≥50,000bp',
 }
 
 ENABLE_SHAP = False

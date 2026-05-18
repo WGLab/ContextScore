@@ -133,12 +133,7 @@ def normalize_chrom_label(chrom):
     return chrom_str.upper()
 
 def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion='hg38', sample_coverage=None):
-        # Add SV length interval features (4 non-type-specific intervals, one-hot encoded)
-        svlen = bed_df['sv_length']
-        bed_df['svlen_50_500'] = ((svlen >= 50) & (svlen < 500)).astype(int)
-        bed_df['svlen_500_5000'] = ((svlen >= 500) & (svlen < 5000)).astype(int)
-        bed_df['svlen_5000_50000'] = ((svlen >= 5000) & (svlen < 50000)).astype(int)
-        bed_df['svlen_50000_plus'] = (svlen >= 50000).astype(int)
+    # ...existing code...
     """Extract the features from the BED file, columns are in the first row:
     chrom, start, end, sv_type, sv_length, genotype, read_depth, hmm_llh, aln_type, cluster_size
     
@@ -176,6 +171,12 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
 
     # Normalize SV length to a positive magnitude.
     bed_df['sv_length'] = bed_df['sv_length'].abs()
+    # Add SV length interval features (4 non-type-specific intervals, one-hot encoded)
+    svlen = bed_df['sv_length']
+    bed_df['svlen_50_500'] = ((svlen >= 50) & (svlen < 500)).astype(int)
+    bed_df['svlen_500_5000'] = ((svlen >= 500) & (svlen < 5000)).astype(int)
+    bed_df['svlen_5000_50000'] = ((svlen >= 5000) & (svlen < 50000)).astype(int)
+    bed_df['svlen_50000_plus'] = (svlen >= 50000).astype(int)
 
     # Drop the genotype column and cn_state columns (due to redundancy).
     bed_df.drop(columns=['genotype', 'cn_state'], inplace=True)
