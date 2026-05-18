@@ -47,8 +47,12 @@ def user_message(message):
 def configure_logging(verbose=False, debug=False):
     """Configure logging output level based on user-selected mode."""
     level = logging.DEBUG if debug else (logging.INFO if verbose else logging.WARNING)
-    logging.basicConfig(level=level, format='%(asctime)s - %(levelname)s - %(message)s')
-
+    logging.basicConfig(
+        level=level,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        stream=sys.stdout,
+        force=True,
+    )
 
 def resolve_annovar_paths(annovar_path, annovar_db_path):
     """Resolve ANNOVAR paths from CLI flags or environment variables."""
