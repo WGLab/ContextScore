@@ -173,9 +173,15 @@ def stratified_undersample_fp(fp_data, target_count, random_state=42):
     
     # Create length bins for stratification
     fp_data_temp = fp_data.copy()
+    # fp_data_temp['length_bin'] = pd.cut(fp_data_temp['sv_length'], 
+    #                                      bins=[0, 1000, 10000, 100000, float('inf')],
+    #                                      labels=['<1kb', '1-10kb', '10-100kb', '>100kb'])
+
+    # Update to the following bins to better capture the distribution of SV lengths in the training data, which is enriched for smaller SVs:
+    # 50-500bp, 500-5,000bp, 5,000-50,000bp, and ≥50,000bp.
     fp_data_temp['length_bin'] = pd.cut(fp_data_temp['sv_length'], 
-                                         bins=[0, 1000, 10000, 100000, float('inf')],
-                                         labels=['<1kb', '1-10kb', '10-100kb', '>100kb'])
+                                         bins=[0, 50, 500, 5000, 50000, float('inf')],
+                                         labels=['<50bp', '50-500bp', '500-5kb', '5-50kb', '≥50kb'])
     
     # Create stratification column combining SV type and length bin
     fp_data_temp['stratum'] = fp_data_temp['sv_type'].astype(str) + '_' + fp_data_temp['length_bin'].astype(str)
