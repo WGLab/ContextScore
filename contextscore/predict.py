@@ -21,12 +21,12 @@ import tempfile
 import numpy as np
 import joblib
 import pandas as pd
+from sklearn.mixture import GaussianMixture
 
 try:
     from .extract_features import extract_features
 except ImportError:
     from extract_features import extract_features
-
 
 USER_PREFIX = "[ContextScore]"
 DEFAULT_MODEL_ENV_VAR = 'CONTEXTSCORE_MODEL_PATH'
@@ -246,6 +246,27 @@ def add_confidence_to_info(line, confidence_score):
     fields[7] += f';CONFSCORE={confidence_score:.4f}'
     return '\t'.join(fields) + '\n'
 
+def gmm_threshold(scores, fallback=0.2):
+    """Fit a 2-component GMM and return the intersection threshold between peaks."""
+    if len(scores) < 20:
+        return fallback
+    try:
+        gmm = GaussianMixture(n_components=2, random_state=42)
+        gmm.fit(scores.reshape(-1, 1))
+        means = gmm.means_.flatten()
+        low_idx, high_idx = np.argsort(means)
+        # Scan between the two peaks and find where the lower component
+        # posterior probability drops below 0.5
+        xs = np.linspace(means[low_idx], means[high_idx], 500).reshape(-1, 1)
+        posteriors = gmm.predict_proba(xs)
+        # Threshold = first x where high component dominates
+        cross = np.where(posteriors[:, high_idx] >= 0.5)[0]
+        if len(cross) == 0:
+            return fallback
+        return float(xs[cross[0]])
+    except Exception:
+        return fallback
+
 def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
           threshold_del=None, threshold_dup=None, threshold_ins=None, threshold_inv=None,
           sample_coverage=None, annovar_path=None, annovar_db_path=None,
@@ -347,6 +368,25 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
     # Run the model on the features
     logging.info('Running the model on the features...')
     y_pred = clf.predict_proba(feature_df)
+
+    # --- Adaptive GMM thresholds (per SV type) ---
+    logging.info('Fitting per-SV-type GMM thresholds...')
+    gmm_thresholds = {}
+    for svtype in ['DEL', 'DUP', 'INS', 'INV']:
+        mask = predictions_df['sv_type_str'] == svtype
+        scores = predictions_df.loc[mask, 'confidence_score'].values
+        if len(scores) >= 20:
+            t = gmm_threshold(scores, fallback=threshold_by_type[svtype])
+            logging.info('  GMM threshold for %s: %.4f (n=%d)', svtype, t, len(scores))
+        else:
+            t = threshold_by_type[svtype]
+            logging.info('  Too few %s variants (%d), using fallback %.4f', svtype, len(scores), t)
+        gmm_thresholds[svtype] = t
+    threshold_by_type = gmm_thresholds  # override static thresholds
+
+    logging.info('Final thresholds after GMM fitting:')
+    for svtype, thr in sorted(threshold_by_type.items()):
+        logging.info('  %s: %.4f', svtype, thr)
 
     # Save per-variant probabilities for downstream threshold tuning.
     predictions_tsv = os.path.join(output_dir, 'predictions.tsv')
