@@ -562,7 +562,7 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
                 # Relax threshold for larger SVs
                 abs_svlen = abs(svlen_match)
                 if abs_svlen is not None and abs_svlen > 10000:
-                    type_threshold = 0.5 * type_threshold
+                    type_threshold = 0.1 * type_threshold
 
                 #  Keep if larger than threshold or >100kb and not deletion
                 should_keep = confidence_score >= type_threshold or (abs_svlen is not None and abs_svlen > 100000)

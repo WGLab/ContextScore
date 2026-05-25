@@ -537,10 +537,11 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
             ) from exc
         metrics = ['F1 Score', 'Precision', 'Recall']
         for model_name in pipelines.keys():
+            model_name_label = model_name.replace("_", " ")
 
             # Save a plot with F1, Precision, and Recall scores for chrY
             if 'chrY' in chromosomes:
-                logging.info('Plotting scores for %s model on chrY.', model_name)
+                logging.info('Plotting scores for %s model on chrY.', model_name_label)
 
                 # Create a bar plot for the F1 scores by chromosome.
                 chry_f1 = f1_scores.get((model_name, 'chrY'), 0)
@@ -553,7 +554,7 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
 
                 # plt.xlabel('Metric')
                 plt.ylabel('Score')
-                plt.title('%s Scores for %s Model on chrY' % (model_name, model_name))
+                plt.title('%s Scores for %s Model on chrY' % (model_name_label, model_name_label))
                 plt.xticks(rotation=45)
                 plt.tight_layout()
                 # Save the plot to the output directory.
@@ -563,7 +564,7 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
                 logging.info('Saved the scores plot for chrY to %s', score_plot_path)
 
             for metric, scores in zip(metrics, [f1_scores, precision_scores, recall_scores]):
-                logging.info('Plotting %s for %s model by chromosome.', metric, model_name)
+                logging.info('Plotting %s for %s model by chromosome.', metric, model_name_label)
                 # Create a bar plot for the F1 scores by chromosome.
                 model_scores = {chrom: scores[(model_name, chrom)] for chrom in chromosomes if (model_name, chrom) in scores}
                 plt.figure(figsize=(10, 6))
@@ -571,7 +572,7 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
 
                 plt.xlabel('Chromosome')
                 plt.ylabel(metric)
-                plt.title('%s for %s Model by Chromosome' % (metric, model_name))
+                plt.title('%s for %s Model by Chromosome' % (metric, model_name_label))
                 plt.xticks(rotation=45)
                 plt.tight_layout()
                 score_plot_path = os.path.join(output_directory, model_name + '_%s_by_chromosome.svg' % metric.lower().replace(' ', '_'))
@@ -588,7 +589,8 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
             raise ValueError('Unable to run training: need at least two classes with at least two samples each for stratified CV.')
 
         for model_name, pipeline in pipelines.items():
-            logging.info('Training model class %s', model_name)
+            model_name_label = model_name.replace("_", " ")
+            logging.info('Training model class %s', model_name_label)
             model_name_fp = "contextscore_" + model_name.lower() + "_leaveout_" + leave_out
 
             if split_80_20:
@@ -638,7 +640,6 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
                 plt.ylim([0.0, 1.05])
                 plt.xlabel('False Positive Rate')
                 plt.ylabel('True Positive Rate')
-                model_name_label = model_name.replace("_", " ")
                 plt.title('{} Receiver Operating Characteristic (Training Set)'.format(model_name_label))
                 plt.legend(loc='lower right')
                 roc_plot_path = os.path.join(output_directory, model_name_fp + '_roc_curve_train.svg')
@@ -665,13 +666,13 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
                 # Save the model to the output directory as a pickle file.
                 model_path = os.path.join(output_directory, model_name_fp + '_model.pkl')
                 joblib.dump(best_model, model_path)
-                logging.info('Saved the %s model to %s', model_name, model_path)
+                logging.info('Saved the %s model to %s', model_name_label, model_path)
 
-            logging.info('Completed training and evaluation for %s model.', model_name)
+            logging.info('Completed training and evaluation for %s model.', model_name_label)
 
             # Run SHAP if full analysis and no leave-outs (SHAP is slow)
             if not split_80_20 and no_leave_out:
-                logging.info('Running feature importance analysis for %s model.', model_name)
+                logging.info('Running feature importance analysis for %s model.', model_name_label)
                 classifier = best_model.named_steps['classifier']
 
                 # For Random Forest, use both native importance and SHAP (with aggressive sampling)
