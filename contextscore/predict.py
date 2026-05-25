@@ -457,10 +457,31 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
                 
                 # Determine if variant should be kept. 0.5*threshold for >10kb, >50kb, and >100kb SVs
                 abs_svlen = abs(svlen_match)
+
+                # Use 0.1 * thr for >50kb inversions
+                # if svtype == 'INV' and abs_svlen > 10000:
+                #     type_threshold = 0.1 * type_threshold
+
+                # # Use 0.1 * thr for >10kb DEL
+                # if svtype == 'DEL' and abs_svlen > 10000:
+                #     type_threshold = 0.1 * type_threshold
+
+                # # Use 0.5 * thr for >5kb INS
+                # if svtype == 'INS' and abs_svlen > 10000:
+                #     type_threshold = 0.1 * type_threshold
+
+                # # Use 0.1 * thr for >5kb DUP
+                # if svtype == 'DUP' and abs_svlen > 10000:
+                #     type_threshold = 0.1 * type_threshold
+
+                if abs_svlen is not None and abs_svlen > 10000:
+                    type_threshold = 0.1 * type_threshold  # Relax threshold for larger SVs
+
                 # if abs_svlen > 10000 and svtype in ['DEL', 'INS', 'DUP']:
                 #     type_threshold = 0.1  # Lower threshold for larger DEL and INS variants
 
-                should_keep = confidence_score >= type_threshold
+                #  Keep if larger than threshold or >100kb and not deletion
+                should_keep = confidence_score >= type_threshold or (abs_svlen is not None and abs_svlen > 100000) #and svtype != 'DEL')
 
                 # if abs_svlen > 50000:
                 #     type_threshold = 0.1 * type_threshold  # Further relax for very large SVs
