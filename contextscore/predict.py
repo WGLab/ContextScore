@@ -246,9 +246,9 @@ def add_confidence_to_info(line, confidence_score):
     fields[7] += f';CONFSCORE={confidence_score:.4f}'
     return '\t'.join(fields) + '\n'
 
-def gmm_threshold(scores, fallback=0.2, min_samples=20):
+def gmm_threshold(scores, fallback=0.2, max_threshold=0.5, min_samples=20):
     """Fit a robust 2-component GMM threshold, with safeguards for unimodal distributions."""
-    fallback = float(np.clip(fallback, 0.0, 0.5))
+    fallback = float(np.clip(fallback, 0.0, max_threshold))
     scores = np.asarray(scores, dtype=np.float64)
     scores = scores[np.isfinite(scores)]
     scores = np.clip(scores, 0.0, 1.0)
@@ -306,9 +306,9 @@ def gmm_threshold(scores, fallback=0.2, min_samples=20):
         threshold = float(xs[cross[0]])
 
         # Quantile guardrails prevent over-aggressive cutoffs when one high peak dominates.
-        # Hard cap at 0.5 as requested by filtering policy.
-        low_guard = min(float(np.quantile(scores, 0.05)), 0.5)
-        high_guard = min(float(np.quantile(scores, 0.85)), 0.5)
+        # Hard cap at max_threshold as requested by filtering policy.
+        low_guard = min(float(np.quantile(scores, 0.05)), max_threshold)
+        high_guard = min(float(np.quantile(scores, 0.85)), max_threshold)
         if high_guard < low_guard:
             low_guard = high_guard
 
@@ -347,9 +347,10 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
     # Threshold policy: per-type GMM when valid, otherwise fallback to 0.5.
     # User-provided thresholds are intentionally ignored for this policy.
     if threshold_del is not None or threshold_dup is not None or threshold_ins is not None or threshold_inv is not None or threshold != 0.05:
-        logging.info('User-provided threshold flags detected but ignored; using GMM thresholds with fallback/max 0.5.')
+        logging.info('User-provided threshold flags detected but ignored; using GMM thresholds with fallback/max')
 
-    gmm_fallback_threshold = 0.5
+    gmm_fallback_threshold = 0.2
+    max_threshold = 0.3
     threshold_by_type = {
         'DEL': gmm_fallback_threshold,
         'DUP': gmm_fallback_threshold,
@@ -358,7 +359,7 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
     }
 
     prob_threshold = gmm_fallback_threshold
-    logging.info('Using confidence threshold policy: GMM per SV type, fallback=0.5, max threshold=0.5')
+    logging.info('Using confidence threshold policy: GMM per SV type, fallback=%.4f, max=%.4f', gmm_fallback_threshold, max_threshold)
 
     output_dir = os.path.dirname(os.path.abspath(output_vcf)) or '.'
     os.makedirs(output_dir, exist_ok=True)
@@ -440,14 +441,14 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
     logging.info('Saved per-variant predictions to %s', predictions_tsv)
 
     # --- Adaptive GMM thresholds (per SV type) ---
-    logging.info('Fitting per-SV-type GMM thresholds with safeguards (fallback/max=0.5)...')
+    logging.info('Fitting per-SV-type GMM thresholds with safeguards (fallback/max=%.4f/%.4f)...', gmm_fallback_threshold, max_threshold)
     gmm_thresholds = {}
     for svtype in ['DEL', 'DUP', 'INS', 'INV']:
         mask = predictions_df['sv_type_str'] == svtype
         scores = predictions_df.loc[mask, 'confidence_score'].values
         if len(scores) >= 20:
-            t = gmm_threshold(scores, fallback=gmm_fallback_threshold)
-            logging.info('  %s threshold from GMM: %.4f (n=%d, capped <= 0.5)', svtype, t, len(scores))
+            t = gmm_threshold(scores, fallback=gmm_fallback_threshold, max_threshold=max_threshold, min_samples=20)
+            logging.info('  %s threshold from GMM: %.4f (n=%d, capped <= %s)', svtype, t, len(scores), max_threshold)
         else:
             t = gmm_fallback_threshold
             logging.info('  Too few %s variants (%d), using fallback %.4f', svtype, len(scores), t)
@@ -558,49 +559,13 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
                 # Get the appropriate threshold for this SV type
                 type_threshold = threshold_by_type.get(svtype, prob_threshold)
                 
-                # Determine if variant should be kept. 0.5*threshold for >10kb, >50kb, and >100kb SVs
+                # Relax threshold for larger SVs
                 abs_svlen = abs(svlen_match)
-
-                # Use 0.1 * thr for >50kb inversions
-                # if svtype == 'INV' and abs_svlen > 10000:
-                #     type_threshold = 0.1 * type_threshold
-
-                # # Use 0.1 * thr for >10kb DEL
-                # if svtype == 'DEL' and abs_svlen > 10000:
-                #     type_threshold = 0.1 * type_threshold
-
-                # # Use 0.5 * thr for >5kb INS
-                # if svtype == 'INS' and abs_svlen > 10000:
-                #     type_threshold = 0.1 * type_threshold
-
-                # # Use 0.1 * thr for >5kb DUP
-                # if svtype == 'DUP' and abs_svlen > 10000:
-                #     type_threshold = 0.1 * type_threshold
-
                 if abs_svlen is not None and abs_svlen > 10000:
-                    type_threshold = 0.1 * type_threshold  # Relax threshold for larger SVs
-
-                # if abs_svlen > 10000 and svtype in ['DEL', 'INS', 'DUP']:
-                #     type_threshold = 0.1  # Lower threshold for larger DEL and INS variants
+                    type_threshold = 0.5 * type_threshold
 
                 #  Keep if larger than threshold or >100kb and not deletion
-                should_keep = confidence_score >= type_threshold or (abs_svlen is not None and abs_svlen > 100000) #and svtype != 'DEL')
-
-                # if abs_svlen > 50000:
-                #     type_threshold = 0.1 * type_threshold  # Further relax for very large SVs
-
-                # if abs_svlen > 10000:
-                #     type_threshold = 0.5 * type_threshold  # Relax threshold for larger SVs
-                #     if abs_svlen > 50000:
-                #         type_threshold = 0.5 * type_threshold  # Further relax for very large SVs
-                #         if abs_svlen > 100000:
-                #             type_threshold = 0.5 * type_threshold  # Further relax for extremely large SVs
-                
-                # For non-deletions, keep all SVs >50kb regardless of confidence score
-                # if svtype != 'DEL':
-                #     should_keep = confidence_score >= type_threshold or (abs_svlen is not None and abs_svlen > 50000)
-                # else:
-                #     should_keep = confidence_score >= type_threshold
+                should_keep = confidence_score >= type_threshold or (abs_svlen is not None and abs_svlen > 100000)
                 
                 # Track statistics by type
                 if svtype not in type_filter_stats:
