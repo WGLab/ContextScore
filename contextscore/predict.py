@@ -369,6 +369,13 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
     logging.info('Running the model on the features...')
     y_pred = clf.predict_proba(feature_df)
 
+    # Save per-variant probabilities for downstream threshold tuning.
+    predictions_tsv = os.path.join(output_dir, 'predictions.tsv')
+    predictions_df = predictions_meta.copy()
+    predictions_df['confidence_score'] = y_pred[:, 1]
+    predictions_df.to_csv(predictions_tsv, sep='\t', index=False)
+    logging.info('Saved per-variant predictions to %s', predictions_tsv)
+
     # --- Adaptive GMM thresholds (per SV type) ---
     logging.info('Fitting per-SV-type GMM thresholds...')
     gmm_thresholds = {}
@@ -387,13 +394,6 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
     logging.info('Final thresholds after GMM fitting:')
     for svtype, thr in sorted(threshold_by_type.items()):
         logging.info('  %s: %.4f', svtype, thr)
-
-    # Save per-variant probabilities for downstream threshold tuning.
-    predictions_tsv = os.path.join(output_dir, 'predictions.tsv')
-    predictions_df = predictions_meta.copy()
-    predictions_df['confidence_score'] = y_pred[:, 1]
-    predictions_df.to_csv(predictions_tsv, sep='\t', index=False)
-    logging.info('Saved per-variant predictions to %s', predictions_tsv)
 
     if debug_plot:
         plt, sns = try_import_plotting_libs()
