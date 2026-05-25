@@ -28,6 +28,12 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # Manuscript-friendly display labels for model features.
 FEATURE_DISPLAY_NAMES = {
     'dist_nearest_sv_per_kb': 'Nearest SV distance / kb',
+    'dist_nearest_nonoverlap_same_type': 'Nearest non-overlap same-type distance (bp)',
+    'dist_nearest_nonoverlap_same_type_log1p': 'Nearest non-overlap same-type distance log1p',
+    'dist_nearest_nonoverlap_same_type_rel_log1p': 'Nearest non-overlap same-type distance rel-log1p',
+    'local_same_type_count_1kb': 'Same-type local SV count (1kb)',
+    'local_same_type_count_10kb': 'Same-type local SV count (10kb)',
+    'local_same_type_count_100kb': 'Same-type local SV count (100kb)',
     'cluster_size_per_kb': 'Cluster size / kb',
     'sv_length': 'SV length (bp)',
     'read_depth_normalized': 'Normalized depth',

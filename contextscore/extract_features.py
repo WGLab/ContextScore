@@ -247,63 +247,79 @@ def extract_features(input_bed, annovar_path, db_path, outdiranno, buildversion=
     # Drop the cn_state column from the data.
     bed_df = bed_df.drop(columns=['cn_state'], errors='ignore')
 
-    # Add distance to nearest other SV call, clustered false positives often appear near real SVs.
-    # logging.info('Computing distance to nearest other SV call (same chromosome)...')
-    # bed_df['dist_to_nearest_sv'] = np.nan
-    # for chrom, idx in bed_df.groupby('chrom', sort=False).groups.items():
-    #     chrom_df = bed_df.loc[idx, ['start', 'end']].sort_values(['start', 'end'])
-    #     n = chrom_df.shape[0]
+    # Compute robust local-neighborhood SV features by chromosome + SV type.
+    # Nearest distance excludes overlaps and is stabilized with log and length-relative transforms.
+    logging.info('Computing robust nearest-SV and local SV-density features (same SV type)...')
+    bed_df['dist_nearest_nonoverlap_same_type'] = np.nan
+    bed_df['dist_nearest_nonoverlap_same_type_log1p'] = np.nan
+    bed_df['dist_nearest_nonoverlap_same_type_rel_log1p'] = np.nan
+    bed_df['local_same_type_count_1kb'] = 0
+    bed_df['local_same_type_count_10kb'] = 0
+    bed_df['local_same_type_count_100kb'] = 0
 
-    #     if n <= 1:
-    #         continue
+    for (_, _), idx in bed_df.groupby(['chrom', 'sv_type_str'], sort=False).groups.items():
+        idx_list = list(idx)
+        group_df = bed_df.loc[idx_list, ['start', 'end', 'sv_length']].copy()
+        n = group_df.shape[0]
 
-    #     starts = chrom_df['start'].to_numpy(dtype=np.int64)
-    #     ends = chrom_df['end'].to_numpy(dtype=np.int64)
+        if n == 0:
+            continue
 
-    #     # Previous interval summary.
-    #     prev_max_end = np.maximum.accumulate(ends)
-    #     prev_max_end_excl = np.empty(n, dtype=np.int64)
-    #     prev_max_end_excl[0] = np.iinfo(np.int64).min
-    #     prev_max_end_excl[1:] = prev_max_end[:-1]
+        starts = pd.to_numeric(group_df['start'], errors='coerce').to_numpy(dtype=np.int64)
+        ends = pd.to_numeric(group_df['end'], errors='coerce').to_numpy(dtype=np.int64)
+        lengths = pd.to_numeric(group_df['sv_length'], errors='coerce').to_numpy(dtype=np.float64)
 
-    #     # Next interval summary.
-    #     next_start_excl = np.empty(n, dtype=np.int64)
-    #     next_start_excl[:-1] = starts[1:]
-    #     next_start_excl[-1] = np.iinfo(np.int64).max
+        # Ensure interval ordering is valid even for malformed coordinates.
+        left = np.minimum(starts, ends)
+        right = np.maximum(starts, ends)
 
-    #     # Overlap checks with prior/next intervals.
-    #     overlap_prev = prev_max_end_excl > starts
-    #     overlap_next = ends > next_start_excl
-    #     overlap_any = overlap_prev | overlap_next
+        nearest = np.full(n, np.nan, dtype=np.float64)
+        if n > 1:
+            sorted_ends = np.sort(right)
+            sorted_starts = np.sort(left)
 
-    #     # Gap to closest left/right neighbor (touching intervals yield 0).
-    #     left_gap = starts - prev_max_end_excl
-    #     right_gap = next_start_excl - ends
+            left_pos = np.searchsorted(sorted_ends, left, side='right') - 1
+            right_pos = np.searchsorted(sorted_starts, right, side='left')
 
-    #     # No-left/no-right sentinels.
-    #     left_gap[0] = np.iinfo(np.int64).max
-    #     right_gap[-1] = np.iinfo(np.int64).max
+            left_gap = np.full(n, np.inf, dtype=np.float64)
+            valid_left = left_pos >= 0
+            left_gap[valid_left] = (left[valid_left] - sorted_ends[left_pos[valid_left]]).astype(np.float64)
 
-    #     nearest = np.minimum(left_gap, right_gap).astype(np.float64)
-    #     nearest[overlap_any] = 0.0
+            right_gap = np.full(n, np.inf, dtype=np.float64)
+            valid_right = right_pos < n
+            right_gap[valid_right] = (sorted_starts[right_pos[valid_right]] - right[valid_right]).astype(np.float64)
 
-    #     # Any remaining sentinel values are undefined (should only happen in degenerate cases).
-    #     sentinel = float(np.iinfo(np.int64).max)
-    #     nearest[nearest >= sentinel] = np.nan
+            nearest = np.minimum(left_gap, right_gap)
+            nearest[np.isinf(nearest)] = np.nan
 
-    #     bed_df.loc[chrom_df.index, 'dist_to_nearest_sv'] = nearest
+        # Length-relative normalization keeps comparability across 100bp to 100kb+ SVs.
+        length_scale = np.maximum(np.abs(lengths), 100.0)
+        nearest_rel = nearest / length_scale
 
-    # logging.info('Distance to nearest SV calculated. Coverage: %.1f%%', (bed_df['dist_to_nearest_sv'].notna().sum() / len(bed_df) * 100))
+        bed_df.loc[idx_list, 'dist_nearest_nonoverlap_same_type'] = nearest
+        bed_df.loc[idx_list, 'dist_nearest_nonoverlap_same_type_log1p'] = np.log1p(nearest)
+        bed_df.loc[idx_list, 'dist_nearest_nonoverlap_same_type_rel_log1p'] = np.log1p(nearest_rel)
 
-    # # Print statistics about the distance to nearest SV feature.
-    # logging.info('Distance to nearest SV - mean: %.2f, median: %.2f, std: %.2f', bed_df['dist_to_nearest_sv'].mean(), bed_df['dist_to_nearest_sv'].median(), bed_df['dist_to_nearest_sv'].std())
+        # Local center-based same-type SV density counts.
+        centers = ((left + right) // 2).astype(np.int64)
+        sorted_centers = np.sort(centers)
+        for window_bp, col_name in [
+            (1000, 'local_same_type_count_1kb'),
+            (10000, 'local_same_type_count_10kb'),
+            (100000, 'local_same_type_count_100kb'),
+        ]:
+            lo = np.searchsorted(sorted_centers, centers - window_bp, side='left')
+            hi = np.searchsorted(sorted_centers, centers + window_bp, side='right')
+            counts = (hi - lo - 1).astype(np.int32)  # Exclude self.
+            bed_df.loc[idx_list, col_name] = counts
 
-    # # Normalize by SV size
-    # bed_df['dist_nearest_sv_per_kb'] = np.where(
-    #     bed_df['sv_length'] > 0,
-    #     bed_df['dist_to_nearest_sv'] / (bed_df['sv_length'] / 1000.0),
-    #     bed_df['dist_to_nearest_sv']
-    # )
+    coverage_pct = bed_df['dist_nearest_nonoverlap_same_type'].notna().mean() * 100
+    logging.info(
+        'Nearest same-type non-overlap distance computed. Coverage: %.2f%%, mean(log1p): %.3f, mean(rel_log1p): %.3f',
+        coverage_pct,
+        bed_df['dist_nearest_nonoverlap_same_type_log1p'].mean(skipna=True),
+        bed_df['dist_nearest_nonoverlap_same_type_rel_log1p'].mean(skipna=True),
+    )
 
     # Return the features dataframe.
     return bed_df
