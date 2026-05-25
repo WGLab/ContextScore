@@ -330,7 +330,7 @@ def gmm_threshold(scores, fallback=0.2, max_threshold=0.5, min_samples=20):
 def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
           threshold_del=None, threshold_dup=None, threshold_ins=None, threshold_inv=None,
           sample_coverage=None, annovar_path=None, annovar_db_path=None,
-          debug_plot=False):
+          debug_plot=False, sample_name=None):
     """Score the structural variants using the binary classification model.
 
     Args:
@@ -343,6 +343,7 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
         threshold_ins (float): Optional. Threshold for INS variants. If None, uses default threshold.
         threshold_inv (float): Optional. Threshold for INV variants. If None, uses default threshold.
         sample_coverage (float): Required. Mean read depth coverage for the sample.
+        sample_name (str): Optional. Name shown in debug probability plot title.
     """
     # Threshold policy: per-type GMM when valid, otherwise fallback to 0.5.
     # User-provided thresholds are intentionally ignored for this policy.
@@ -464,11 +465,17 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
         if plt is None or sns is None:
             logging.warning('Debug plotting requested but matplotlib/seaborn are not installed. Skipping plot generation.')
         else:
+            dataset_name = sample_name if sample_name else os.path.basename(input_vcf)
+            if dataset_name.endswith('.vcf.gz'):
+                dataset_name = dataset_name[:-7]
+            elif dataset_name.endswith('.vcf'):
+                dataset_name = dataset_name[:-4]
+
             _, ax = plt.subplots()
             sns.histplot(y_pred[:, 1], bins=20, ax=ax)
             ax.set_xlabel('Confidence Score')
             ax.set_ylabel('Count')
-            ax.set_title('Probability Distribution')
+            ax.set_title(f'{dataset_name} Probability Distribution')
             plot_path = os.path.join(output_dir, 'prob_dist.svg')
             plt.savefig(plot_path)
             plt.close()
@@ -628,6 +635,8 @@ def main(argv=None):
                         help='Threshold for INV variants (default: uses --threshold value).')
     parser.add_argument('--sample-coverage', type=float, required=True,
                         help='Mean read depth coverage for the sample (required, used to normalize read_depth).')
+    parser.add_argument('--sample-name', type=str, default=None,
+                        help='Optional sample/dataset name used in debug probability plot title.')
     parser.add_argument('--annovar', type=str, default=None,
                         help='Path to ANNOVAR installation directory. Can also be set via ANNOVAR_PATH.')
     parser.add_argument('--annovar-db', type=str, default=None,
@@ -706,7 +715,8 @@ def main(argv=None):
                     threshold_ins=args.threshold_ins, threshold_inv=args.threshold_inv,
                     annovar_path=annovar_path,
                     annovar_db_path=annovar_db_path,
-                    debug_plot=args.debug_plot)
+                    debug_plot=args.debug_plot,
+                    sample_name=args.sample_name)
 
     user_message(
         f"Completed. Kept {summary['passed_records']}/{summary['total_records']} variants; filtered {summary['filtered_records']}."

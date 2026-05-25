@@ -547,13 +547,18 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
                 chry_f1 = f1_scores.get((model_name, 'chrY'), 0)
                 chry_precision = precision_scores.get((model_name, 'chrY'), 0)
                 chry_recall = recall_scores.get((model_name, 'chrY'), 0)
-                plt.figure(figsize=(6, 4))
+                plt.figure(figsize=(5, 3))
 
                 # Plot F1, Precision, and Recall scores for chrY.
-                sns.barplot(x=['F1 Score', 'Precision', 'Recall'], y=[chry_f1, chry_precision, chry_recall], color='black')
+                ax = sns.barplot(
+                    x=['F1 Score', 'Precision', 'Recall'],
+                    y=[chry_f1, chry_precision, chry_recall],
+                    color='#1f77b4'
+                )
 
                 # plt.xlabel('Metric')
                 plt.ylabel('Score')
+                ax.set_ylim(0, 1.0)
                 plt.title('%s Scores for %s Model on chrY' % (model_name_label, model_name_label))
                 plt.xticks(rotation=45)
                 plt.tight_layout()
@@ -567,11 +572,16 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
                 logging.info('Plotting %s for %s model by chromosome.', metric, model_name_label)
                 # Create a bar plot for the F1 scores by chromosome.
                 model_scores = {chrom: scores[(model_name, chrom)] for chrom in chromosomes if (model_name, chrom) in scores}
-                plt.figure(figsize=(10, 6))
-                ax = sns.barplot(x=list(model_scores.keys()), y=list(model_scores.values()), color='black')
+                plt.figure(figsize=(8, 4))
+                ax = sns.barplot(
+                    x=list(model_scores.keys()),
+                    y=list(model_scores.values()),
+                    color='#1f77b4'
+                )
 
                 plt.xlabel('Chromosome')
                 plt.ylabel(metric)
+                ax.set_ylim(0, 1.0)
                 plt.title('%s for %s Model by Chromosome' % (metric, model_name_label))
                 plt.xticks(rotation=45)
                 plt.tight_layout()
