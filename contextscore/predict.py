@@ -246,25 +246,85 @@ def add_confidence_to_info(line, confidence_score):
     fields[7] += f';CONFSCORE={confidence_score:.4f}'
     return '\t'.join(fields) + '\n'
 
-def gmm_threshold(scores, fallback=0.2):
-    """Fit a 2-component GMM and return the intersection threshold between peaks."""
-    if len(scores) < 20:
+def gmm_threshold(scores, fallback=0.2, min_samples=20):
+    """Fit a robust 2-component GMM threshold, with safeguards for unimodal distributions."""
+    fallback = float(np.clip(fallback, 0.0, 0.5))
+    scores = np.asarray(scores, dtype=np.float64)
+    scores = scores[np.isfinite(scores)]
+    scores = np.clip(scores, 0.0, 1.0)
+
+    if scores.size < min_samples:
+        logging.info('GMM threshold skipped: only %d samples (min=%d). Using fallback %.4f', scores.size, min_samples, fallback)
         return fallback
+
     try:
-        gmm = GaussianMixture(n_components=2, random_state=42)
-        gmm.fit(scores.reshape(-1, 1))
-        means = gmm.means_.flatten()
+        x = scores.reshape(-1, 1)
+        gmm_1 = GaussianMixture(n_components=1, random_state=42)
+        gmm_2 = GaussianMixture(n_components=2, random_state=42)
+        gmm_1.fit(x)
+        gmm_2.fit(x)
+
+        bic_1 = float(gmm_1.bic(x))
+        bic_2 = float(gmm_2.bic(x))
+        bic_gain = bic_1 - bic_2
+
+        # If 2-component fit is not clearly better, treat as unimodal.
+        if bic_gain < 10.0:
+            logging.info(
+                'GMM threshold fallback: weak 2-component evidence (BIC gain %.2f). Using fallback %.4f',
+                bic_gain,
+                fallback,
+            )
+            return fallback
+
+        means = gmm_2.means_.flatten()
+        weights = gmm_2.weights_.flatten()
+        stds = np.sqrt(gmm_2.covariances_.flatten())
         low_idx, high_idx = np.argsort(means)
-        # Scan between the two peaks and find where the lower component
-        # posterior probability drops below 0.5
-        xs = np.linspace(means[low_idx], means[high_idx], 500).reshape(-1, 1)
-        posteriors = gmm.predict_proba(xs)
-        # Threshold = first x where high component dominates
+
+        mean_gap = float(means[high_idx] - means[low_idx])
+        separation = mean_gap / float(stds[high_idx] + stds[low_idx] + 1e-9)
+
+        # Guard against pseudo-bimodal fits where one component just captures a tail.
+        if mean_gap < 0.08 or separation < 1.0 or float(weights.min()) < 0.10:
+            logging.info(
+                'GMM threshold fallback: weak separation (gap=%.3f, sep=%.3f, min_weight=%.3f). Using fallback %.4f',
+                mean_gap,
+                separation,
+                float(weights.min()),
+                fallback,
+            )
+            return fallback
+
+        xs = np.linspace(means[low_idx], means[high_idx], 800).reshape(-1, 1)
+        posteriors = gmm_2.predict_proba(xs)
         cross = np.where(posteriors[:, high_idx] >= 0.5)[0]
         if len(cross) == 0:
+            logging.info('GMM threshold fallback: no posterior crossing found. Using fallback %.4f', fallback)
             return fallback
-        return float(xs[cross[0]])
-    except Exception:
+
+        threshold = float(xs[cross[0]])
+
+        # Quantile guardrails prevent over-aggressive cutoffs when one high peak dominates.
+        # Hard cap at 0.5 as requested by filtering policy.
+        low_guard = min(float(np.quantile(scores, 0.05)), 0.5)
+        high_guard = min(float(np.quantile(scores, 0.85)), 0.5)
+        if high_guard < low_guard:
+            low_guard = high_guard
+
+        threshold_clipped = float(np.clip(threshold, low_guard, high_guard))
+        if threshold_clipped != threshold:
+            logging.info(
+                'GMM threshold clipped from %.4f to %.4f using guards [%.4f, %.4f].',
+                threshold,
+                threshold_clipped,
+                low_guard,
+                high_guard,
+            )
+
+        return threshold_clipped
+    except Exception as exc:
+        logging.warning('GMM threshold fallback after error: %s. Using fallback %.4f', str(exc), fallback)
         return fallback
 
 def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
@@ -284,18 +344,21 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
         threshold_inv (float): Optional. Threshold for INV variants. If None, uses default threshold.
         sample_coverage (float): Required. Mean read depth coverage for the sample.
     """
-    # Build threshold dictionary with type-specific values
+    # Threshold policy: per-type GMM when valid, otherwise fallback to 0.5.
+    # User-provided thresholds are intentionally ignored for this policy.
+    if threshold_del is not None or threshold_dup is not None or threshold_ins is not None or threshold_inv is not None or threshold != 0.05:
+        logging.info('User-provided threshold flags detected but ignored; using GMM thresholds with fallback/max 0.5.')
+
+    gmm_fallback_threshold = 0.5
     threshold_by_type = {
-        'DEL': threshold_del if threshold_del is not None else threshold,
-        'DUP': threshold_dup if threshold_dup is not None else threshold,
-        'INS': threshold_ins if threshold_ins is not None else threshold,
-        'INV': threshold_inv if threshold_inv is not None else threshold,
+        'DEL': gmm_fallback_threshold,
+        'DUP': gmm_fallback_threshold,
+        'INS': gmm_fallback_threshold,
+        'INV': gmm_fallback_threshold,
     }
-    
-    prob_threshold = threshold
-    logging.info('Using confidence threshold policy:')
-    for svtype, thr in sorted(threshold_by_type.items()):
-        logging.info('  %s: %.3f', svtype, thr)
+
+    prob_threshold = gmm_fallback_threshold
+    logging.info('Using confidence threshold policy: GMM per SV type, fallback=0.5, max threshold=0.5')
 
     output_dir = os.path.dirname(os.path.abspath(output_vcf)) or '.'
     os.makedirs(output_dir, exist_ok=True)
@@ -377,16 +440,16 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
     logging.info('Saved per-variant predictions to %s', predictions_tsv)
 
     # --- Adaptive GMM thresholds (per SV type) ---
-    logging.info('Fitting per-SV-type GMM thresholds...')
+    logging.info('Fitting per-SV-type GMM thresholds with safeguards (fallback/max=0.5)...')
     gmm_thresholds = {}
     for svtype in ['DEL', 'DUP', 'INS', 'INV']:
         mask = predictions_df['sv_type_str'] == svtype
         scores = predictions_df.loc[mask, 'confidence_score'].values
         if len(scores) >= 20:
-            t = gmm_threshold(scores, fallback=threshold_by_type[svtype])
-            logging.info('  GMM threshold for %s: %.4f (n=%d)', svtype, t, len(scores))
+            t = gmm_threshold(scores, fallback=gmm_fallback_threshold)
+            logging.info('  %s threshold from GMM: %.4f (n=%d, capped <= 0.5)', svtype, t, len(scores))
         else:
-            t = threshold_by_type[svtype]
+            t = gmm_fallback_threshold
             logging.info('  Too few %s variants (%d), using fallback %.4f', svtype, len(scores), t)
         gmm_thresholds[svtype] = t
     threshold_by_type = gmm_thresholds  # override static thresholds
