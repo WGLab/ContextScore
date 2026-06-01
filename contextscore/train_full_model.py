@@ -28,6 +28,12 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # Manuscript-friendly display labels for model features.
 FEATURE_DISPLAY_NAMES = {
     'dist_nearest_sv_per_kb': 'Nearest SV distance / kb',
+    'dist_nearest_nonoverlap_same_type': 'Nearest non-overlap same-type distance (bp)',
+    'dist_nearest_nonoverlap_same_type_log1p': 'Nearest non-overlap same-type distance log1p',
+    'dist_nearest_nonoverlap_same_type_rel_log1p': 'Nearest non-overlap same-type distance rel-log1p',
+    'local_same_type_count_1kb': 'Same-type local SV count (1kb)',
+    'local_same_type_count_10kb': 'Same-type local SV count (10kb)',
+    'local_same_type_count_100kb': 'Same-type local SV count (100kb)',
     'cluster_size_per_kb': 'Cluster size / kb',
     'sv_length': 'SV length (bp)',
     'read_depth_normalized': 'Normalized depth',
@@ -43,7 +49,11 @@ FEATURE_DISPLAY_NAMES = {
     'fragile_site': 'Fragile-site overlap',
     'phastCons': 'phastCons score',
     'hmm_llh': 'HMM log-likelihood',
-    'aln_offset': 'Alignment offset'
+    'aln_offset': 'Alignment offset',
+    'svlen_50_500': 'SV length 50-500bp',
+    'svlen_500_5000': 'SV length 500-5,000bp',
+    'svlen_5000_50000': 'SV length 5,000-50,000bp',
+    'svlen_50000_plus': 'SV length ≥50,000bp',
 }
 
 ENABLE_SHAP = False
@@ -84,6 +94,39 @@ def get_cv_splits(y, max_splits=5):
         return None
 
     return StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+
+
+def assign_sv_length_bin(sv_length_series):
+    """Assign SV lengths to manuscript-aligned bins used for weighting and reporting."""
+    length_labels = ['50-500bp', '500-5kb', '5-50kb', '>=50kb']
+    sv_length_numeric = pd.to_numeric(sv_length_series, errors='coerce').fillna(50).clip(lower=50)
+    return pd.cut(
+        sv_length_numeric,
+        bins=[50, 500, 5000, 50000, float('inf')],
+        labels=length_labels,
+        include_lowest=True
+    )
+
+
+def compute_length_aware_sample_weights(feature_df, labels):
+    """Compute sample weights using SV-length rarity only."""
+    if 'sv_length' not in feature_df.columns:
+        logging.warning('sv_length not available; using uniform sample weights.')
+        return np.ones(len(labels), dtype='float64')
+
+    length_bins = assign_sv_length_bin(feature_df['sv_length']).astype(str).reset_index(drop=True)
+
+    # Inverse-frequency length-bin weights to upweight sparse large-SV bins.
+    bin_counts = length_bins.value_counts()
+    bin_weights = length_bins.map(lambda b: len(length_bins) / (len(bin_counts) * bin_counts[b]))
+
+    weights = bin_weights
+    weights = weights / weights.mean()
+
+    logging.info('SV length-bin counts in training set: %s', bin_counts.to_dict())
+    logging.info('Computed length-aware sample weights (min=%.3f, max=%.3f, mean=%.3f)',
+                 float(weights.min()), float(weights.max()), float(weights.mean()))
+    return weights.to_numpy(dtype='float64')
 
 def balance_tp_fp_datasets(tp_data, fp_data):
     """Balance the true positive and false positive datasets by undersampling the lower-count class."""
@@ -169,9 +212,18 @@ def stratified_undersample_fp(fp_data, target_count, random_state=42):
     
     # Create length bins for stratification
     fp_data_temp = fp_data.copy()
-    fp_data_temp['length_bin'] = pd.cut(fp_data_temp['sv_length'], 
-                                         bins=[0, 1000, 10000, 100000, float('inf')],
-                                         labels=['<1kb', '1-10kb', '10-100kb', '>100kb'])
+    # fp_data_temp['length_bin'] = pd.cut(fp_data_temp['sv_length'], 
+    #                                      bins=[0, 1000, 10000, 100000, float('inf')],
+    #                                      labels=['<1kb', '1-10kb', '10-100kb', '>100kb'])
+
+    # Use the same four bins used in training/evaluation (all SVs are >=50bp).
+    sv_length_numeric = pd.to_numeric(fp_data_temp['sv_length'], errors='coerce').fillna(50).clip(lower=50)
+    fp_data_temp['length_bin'] = pd.cut(
+        sv_length_numeric,
+        bins=[50, 500, 5000, 50000, float('inf')],
+        labels=['50-500bp', '500-5kb', '5-50kb', '>=50kb'],
+        include_lowest=True
+    )
     
     # Create stratification column combining SV type and length bin
     fp_data_temp['stratum'] = fp_data_temp['sv_type'].astype(str) + '_' + fp_data_temp['length_bin'].astype(str)
@@ -319,7 +371,7 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
     chrom_col = data.pop('chrom')
 
     # Drop columns that are not needed for training.
-    # Keep normalized *_per_kb features; remove raw versions.
+    # Keep normalized *_per_kb features and keep raw sv_length for length-aware learning.
     data = data.drop(columns=['start', 'end', 'sv_type_str', 'cluster_size', 'dist_to_nearest_sv', 'read_depth'], errors='ignore')
 
     logging.info('Columns list after preprocessing: %s', data.columns.tolist())
@@ -421,6 +473,7 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
 
                 X_train_chrom_processed = preprocess_feature_matrix(X_train_chrom)
                 X_test_chrom_processed = preprocess_feature_matrix(X_test_chrom)
+                sample_weights_chrom = compute_length_aware_sample_weights(X_train_chrom, y_train_chrom)
 
                 fold_cv = get_cv_splits(y_train_chrom)
                 if fold_cv is None:
@@ -438,7 +491,7 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
                     scoring='precision',
                     n_jobs=-1
                 )
-                grid_search.fit(X_train_chrom_processed, y_train_chrom)
+                grid_search.fit(X_train_chrom_processed, y_train_chrom, classifier__sample_weight=sample_weights_chrom)
                 best_model = grid_search.best_estimator_
                 logging.info(
                     'Best hyperparameters for %s on held-out chromosome %s: %s',
@@ -484,23 +537,29 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
             ) from exc
         metrics = ['F1 Score', 'Precision', 'Recall']
         for model_name in pipelines.keys():
+            model_name_label = model_name.replace("_", " ")
 
             # Save a plot with F1, Precision, and Recall scores for chrY
             if 'chrY' in chromosomes:
-                logging.info('Plotting scores for %s model on chrY.', model_name)
+                logging.info('Plotting scores for %s model on chrY.', model_name_label)
 
                 # Create a bar plot for the F1 scores by chromosome.
                 chry_f1 = f1_scores.get((model_name, 'chrY'), 0)
                 chry_precision = precision_scores.get((model_name, 'chrY'), 0)
                 chry_recall = recall_scores.get((model_name, 'chrY'), 0)
-                plt.figure(figsize=(6, 4))
+                plt.figure(figsize=(5, 3))
 
                 # Plot F1, Precision, and Recall scores for chrY.
-                sns.barplot(x=['F1 Score', 'Precision', 'Recall'], y=[chry_f1, chry_precision, chry_recall], color='black')
+                ax = sns.barplot(
+                    x=['F1 Score', 'Precision', 'Recall'],
+                    y=[chry_f1, chry_precision, chry_recall],
+                    color='#1f77b4'
+                )
 
                 # plt.xlabel('Metric')
                 plt.ylabel('Score')
-                plt.title('%s Scores for %s Model on chrY' % (model_name, model_name))
+                ax.set_ylim(0, 1.0)
+                plt.title('%s Scores for %s Model on chrY' % (model_name_label, model_name_label))
                 plt.xticks(rotation=45)
                 plt.tight_layout()
                 # Save the plot to the output directory.
@@ -510,15 +569,20 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
                 logging.info('Saved the scores plot for chrY to %s', score_plot_path)
 
             for metric, scores in zip(metrics, [f1_scores, precision_scores, recall_scores]):
-                logging.info('Plotting %s for %s model by chromosome.', metric, model_name)
+                logging.info('Plotting %s for %s model by chromosome.', metric, model_name_label)
                 # Create a bar plot for the F1 scores by chromosome.
                 model_scores = {chrom: scores[(model_name, chrom)] for chrom in chromosomes if (model_name, chrom) in scores}
-                plt.figure(figsize=(10, 6))
-                ax = sns.barplot(x=list(model_scores.keys()), y=list(model_scores.values()), color='black')
+                plt.figure(figsize=(8, 4))
+                ax = sns.barplot(
+                    x=list(model_scores.keys()),
+                    y=list(model_scores.values()),
+                    color='#1f77b4'
+                )
 
                 plt.xlabel('Chromosome')
                 plt.ylabel(metric)
-                plt.title('%s for %s Model by Chromosome' % (metric, model_name))
+                ax.set_ylim(0, 1.0)
+                plt.title('%s for %s Model by Chromosome' % (metric, model_name_label))
                 plt.xticks(rotation=45)
                 plt.tight_layout()
                 score_plot_path = os.path.join(output_directory, model_name + '_%s_by_chromosome.svg' % metric.lower().replace(' ', '_'))
@@ -535,7 +599,8 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
             raise ValueError('Unable to run training: need at least two classes with at least two samples each for stratified CV.')
 
         for model_name, pipeline in pipelines.items():
-            logging.info('Training model class %s', model_name)
+            model_name_label = model_name.replace("_", " ")
+            logging.info('Training model class %s', model_name_label)
             model_name_fp = "contextscore_" + model_name.lower() + "_leaveout_" + leave_out
 
             if split_80_20:
@@ -544,9 +609,10 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
             # Perform grid search to find the best hyperparameters for the model, optimizing for precision to prioritize reducing false positives.
             X_train_processed = preprocess_feature_matrix(X_train)
             X_test_processed = preprocess_feature_matrix(X_test)
+            sample_weights = compute_length_aware_sample_weights(X_train, y_train)
 
             grid_search = GridSearchCV(estimator=pipeline, param_grid=param_grids[model_name], cv=cv, scoring='precision', n_jobs=-1)
-            grid_search.fit(X_train_processed, y_train)
+            grid_search.fit(X_train_processed, y_train, classifier__sample_weight=sample_weights)
             logging.info('Best hyperparameters for %s: %s', model_name, grid_search.best_params_)
 
             # Get predicted probabilities for the training and testing sets.
@@ -584,7 +650,6 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
                 plt.ylim([0.0, 1.05])
                 plt.xlabel('False Positive Rate')
                 plt.ylabel('True Positive Rate')
-                model_name_label = model_name.replace("_", " ")
                 plt.title('{} Receiver Operating Characteristic (Training Set)'.format(model_name_label))
                 plt.legend(loc='lower right')
                 roc_plot_path = os.path.join(output_directory, model_name_fp + '_roc_curve_train.svg')
@@ -611,13 +676,13 @@ def train(tp_hg002_grch37, fp_hg002_grch37, tp_visor_grch38, fp_visor_grch38, tp
                 # Save the model to the output directory as a pickle file.
                 model_path = os.path.join(output_directory, model_name_fp + '_model.pkl')
                 joblib.dump(best_model, model_path)
-                logging.info('Saved the %s model to %s', model_name, model_path)
+                logging.info('Saved the %s model to %s', model_name_label, model_path)
 
-            logging.info('Completed training and evaluation for %s model.', model_name)
+            logging.info('Completed training and evaluation for %s model.', model_name_label)
 
             # Run SHAP if full analysis and no leave-outs (SHAP is slow)
             if not split_80_20 and no_leave_out:
-                logging.info('Running feature importance analysis for %s model.', model_name)
+                logging.info('Running feature importance analysis for %s model.', model_name_label)
                 classifier = best_model.named_steps['classifier']
 
                 # For Random Forest, use both native importance and SHAP (with aggressive sampling)

@@ -21,12 +21,12 @@ import tempfile
 import numpy as np
 import joblib
 import pandas as pd
+from sklearn.mixture import GaussianMixture
 
 try:
     from .extract_features import extract_features
 except ImportError:
     from extract_features import extract_features
-
 
 USER_PREFIX = "[ContextScore]"
 DEFAULT_MODEL_ENV_VAR = 'CONTEXTSCORE_MODEL_PATH'
@@ -47,8 +47,12 @@ def user_message(message):
 def configure_logging(verbose=False, debug=False):
     """Configure logging output level based on user-selected mode."""
     level = logging.DEBUG if debug else (logging.INFO if verbose else logging.WARNING)
-    logging.basicConfig(level=level, format='%(asctime)s - %(levelname)s - %(message)s')
-
+    logging.basicConfig(
+        level=level,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        stream=sys.stdout,
+        force=True,
+    )
 
 def resolve_annovar_paths(annovar_path, annovar_db_path):
     """Resolve ANNOVAR paths from CLI flags or environment variables."""
@@ -237,36 +241,117 @@ def create_bed(input_vcf, output_bed):
     logging.info('Created BED file: %s', output_bed)
     return skipped_chrom_ids
 
-def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
-          threshold_del=None, threshold_dup=None, threshold_ins=None, threshold_inv=None,
-          sample_coverage=None, large_cutoff=10000, annovar_path=None, annovar_db_path=None,
-          debug_plot=False):
+def add_confidence_to_info(line, confidence_score):
+    fields = line.rstrip('\n').split('\t')
+    fields[7] += f';CONFSCORE={confidence_score:.4f}'
+    return '\t'.join(fields) + '\n'
+
+def gmm_threshold(scores, fallback=0.2, max_threshold=0.5, min_samples=20):
+    """Fit a robust 2-component GMM threshold, with safeguards for unimodal distributions."""
+    fallback = float(np.clip(fallback, 0.0, max_threshold))
+    scores = np.asarray(scores, dtype=np.float64)
+    scores = scores[np.isfinite(scores)]
+    scores = np.clip(scores, 0.0, 1.0)
+
+    if scores.size < min_samples:
+        logging.info('GMM threshold skipped: only %d samples (min=%d). Using fallback %.4f', scores.size, min_samples, fallback)
+        return fallback
+
+    try:
+        x = scores.reshape(-1, 1)
+        gmm_1 = GaussianMixture(n_components=1, random_state=42)
+        gmm_2 = GaussianMixture(n_components=2, random_state=42)
+        gmm_1.fit(x)
+        gmm_2.fit(x)
+
+        bic_1 = float(gmm_1.bic(x))
+        bic_2 = float(gmm_2.bic(x))
+        bic_gain = bic_1 - bic_2
+
+        # If 2-component fit is not clearly better, treat as unimodal.
+        if bic_gain < 10.0:
+            logging.info(
+                'GMM threshold fallback: weak 2-component evidence (BIC gain %.2f). Using fallback %.4f',
+                bic_gain,
+                fallback,
+            )
+            return fallback
+
+        means = gmm_2.means_.flatten()
+        weights = gmm_2.weights_.flatten()
+        stds = np.sqrt(gmm_2.covariances_.flatten())
+        low_idx, high_idx = np.argsort(means)
+
+        mean_gap = float(means[high_idx] - means[low_idx])
+        separation = mean_gap / float(stds[high_idx] + stds[low_idx] + 1e-9)
+
+        # Guard against pseudo-bimodal fits where one component just captures a tail.
+        if mean_gap < 0.08 or separation < 1.0 or float(weights.min()) < 0.10:
+            logging.info(
+                'GMM threshold fallback: weak separation (gap=%.3f, sep=%.3f, min_weight=%.3f). Using fallback %.4f',
+                mean_gap,
+                separation,
+                float(weights.min()),
+                fallback,
+            )
+            return fallback
+
+        xs = np.linspace(means[low_idx], means[high_idx], 800).reshape(-1, 1)
+        posteriors = gmm_2.predict_proba(xs)
+        cross = np.where(posteriors[:, high_idx] >= 0.5)[0]
+        if len(cross) == 0:
+            logging.info('GMM threshold fallback: no posterior crossing found. Using fallback %.4f', fallback)
+            return fallback
+
+        threshold = float(xs[cross[0]])
+
+        # Quantile guardrails prevent over-aggressive cutoffs when one high peak dominates.
+        # Hard cap at max_threshold as requested by filtering policy.
+        low_guard = min(float(np.quantile(scores, 0.05)), max_threshold)
+        high_guard = min(float(np.quantile(scores, 0.85)), max_threshold)
+        if high_guard < low_guard:
+            low_guard = high_guard
+
+        threshold_clipped = float(np.clip(threshold, low_guard, high_guard))
+        if threshold_clipped != threshold:
+            logging.info(
+                'GMM threshold clipped from %.4f to %.4f using guards [%.4f, %.4f].',
+                threshold,
+                threshold_clipped,
+                low_guard,
+                high_guard,
+            )
+
+        return threshold_clipped
+    except Exception as exc:
+        logging.warning('GMM threshold fallback after error: %s. Using fallback %.4f', str(exc), fallback)
+        return fallback
+
+def score(model, input_vcf, output_vcf, buildver='hg38',
+          sample_coverage=None, annovar_path=None, annovar_db_path=None,
+          debug_plot=False, sample_name=None):
     """Score the structural variants using the binary classification model.
 
     Args:
         model (str): Path to the model file.
         input_vcf (str): Path to the input VCF file.
         output_vcf (str): Path to the output VCF file.
-        threshold (float): Default threshold for SV types not specified.
-        threshold_del (float): Optional. Threshold for DEL variants. If None, uses default threshold.
-        threshold_dup (float): Optional. Threshold for DUP variants. If None, uses default threshold.
-        threshold_ins (float): Optional. Threshold for INS variants. If None, uses default threshold.
-        threshold_inv (float): Optional. Threshold for INV variants. If None, uses default threshold.
         sample_coverage (float): Required. Mean read depth coverage for the sample.
-        large_cutoff (int): SV size cutoff in bp; variants larger than this are always kept (default: 50000).
+        sample_name (str): Optional. Name shown in debug probability plot title.
     """
-    # Build threshold dictionary with type-specific values
+    # Threshold policy: per-type GMM when valid, otherwise fallback values.
+
+    gmm_fallback_threshold = 0.2
+    max_threshold = 0.3
     threshold_by_type = {
-        'DEL': threshold_del if threshold_del is not None else threshold,
-        'DUP': threshold_dup if threshold_dup is not None else threshold,
-        'INS': threshold_ins if threshold_ins is not None else threshold,
-        'INV': threshold_inv if threshold_inv is not None else threshold,
+        'DEL': gmm_fallback_threshold,
+        'DUP': gmm_fallback_threshold,
+        'INS': gmm_fallback_threshold,
+        'INV': gmm_fallback_threshold,
     }
-    
-    prob_threshold = threshold
-    logging.info('Using confidence threshold policy:')
-    for svtype, thr in sorted(threshold_by_type.items()):
-        logging.info('  %s: %.3f', svtype, thr)
+
+    prob_threshold = gmm_fallback_threshold
+    logging.info('Using confidence threshold policy: GMM per SV type, fallback=%.4f, max=%.4f', gmm_fallback_threshold, max_threshold)
 
     output_dir = os.path.dirname(os.path.abspath(output_vcf)) or '.'
     os.makedirs(output_dir, exist_ok=True)
@@ -304,11 +389,16 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
         'end': pd.to_numeric(feature_df['end'], errors='coerce').astype('Int64').values if 'end' in feature_df.columns else pd.Series([pd.NA] * len(id_col), dtype='Int64').values,
         'sv_type_str': feature_df['sv_type_str'].astype(str).values if 'sv_type_str' in feature_df.columns else np.nan,
         'sv_length': pd.to_numeric(feature_df['sv_length'], errors='coerce').astype('Int64').values if 'sv_length' in feature_df.columns else pd.Series([pd.NA] * len(id_col), dtype='Int64').values,
+        # Only the 4 non-type-specific interval features
+        'svlen_50_500': feature_df['svlen_50_500'].values if 'svlen_50_500' in feature_df.columns else np.nan,
+        'svlen_500_5000': feature_df['svlen_500_5000'].values if 'svlen_500_5000' in feature_df.columns else np.nan,
+        'svlen_5000_50000': feature_df['svlen_5000_50000'].values if 'svlen_5000_50000' in feature_df.columns else np.nan,
+        'svlen_50000_plus': feature_df['svlen_50000_plus'].values if 'svlen_50000_plus' in feature_df.columns else np.nan,
     })
     predictions_meta['sv_length_abs'] = predictions_meta['sv_length'].abs()
     
-    # Remove other non-feature columns before prediction.
-    # Keep normalized *_per_kb features; remove raw versions.
+    # Remove non-feature columns before prediction.
+    # Keep normalized *_per_kb features and keep raw sv_length for length-aware models.
     for col in ['chrom', 'start', 'end', 'sv_type_str', 'cluster_size', 'dist_to_nearest_sv', 'read_depth']:
         if col in feature_df.columns:
             feature_df.pop(col)
@@ -342,16 +432,41 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
     predictions_df.to_csv(predictions_tsv, sep='\t', index=False)
     logging.info('Saved per-variant predictions to %s', predictions_tsv)
 
+    # --- Adaptive GMM thresholds (per SV type) ---
+    logging.info('Fitting per-SV-type GMM thresholds with safeguards (fallback/max=%.4f/%.4f)...', gmm_fallback_threshold, max_threshold)
+    gmm_thresholds = {}
+    for svtype in ['DEL', 'DUP', 'INS', 'INV']:
+        mask = predictions_df['sv_type_str'] == svtype
+        scores = predictions_df.loc[mask, 'confidence_score'].values
+        if len(scores) >= 20:
+            t = gmm_threshold(scores, fallback=gmm_fallback_threshold, max_threshold=max_threshold, min_samples=20)
+            logging.info('  %s threshold from GMM: %.4f (n=%d, capped <= %s)', svtype, t, len(scores), max_threshold)
+        else:
+            t = gmm_fallback_threshold
+            logging.info('  Too few %s variants (%d), using fallback %.4f', svtype, len(scores), t)
+        gmm_thresholds[svtype] = t
+    threshold_by_type = gmm_thresholds  # override static thresholds
+
+    logging.info('Final thresholds after GMM fitting:')
+    for svtype, thr in sorted(threshold_by_type.items()):
+        logging.info('  %s: %.4f', svtype, thr)
+
     if debug_plot:
         plt, sns = try_import_plotting_libs()
         if plt is None or sns is None:
             logging.warning('Debug plotting requested but matplotlib/seaborn are not installed. Skipping plot generation.')
         else:
+            dataset_name = sample_name if sample_name else os.path.basename(input_vcf)
+            if dataset_name.endswith('.vcf.gz'):
+                dataset_name = dataset_name[:-7]
+            elif dataset_name.endswith('.vcf'):
+                dataset_name = dataset_name[:-4]
+
             _, ax = plt.subplots()
             sns.histplot(y_pred[:, 1], bins=20, ax=ax)
             ax.set_xlabel('Confidence Score')
             ax.set_ylabel('Count')
-            ax.set_title('Probability Distribution')
+            ax.set_title(f'{dataset_name} Probability Distribution')
             plot_path = os.path.join(output_dir, 'prob_dist.svg')
             plt.savefig(plot_path)
             plt.close()
@@ -364,15 +479,15 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
     
     logging.info('Built variant lookup with %d entries for type-specific filtering', len(variant_lookup))
     
-    # For backward compatibility, also track variants below the default threshold
+    # Track variants below the fallback threshold for logging/debugging.
     filtered_indices = np.where(y_pred[:, 1] < prob_threshold)[0]
-    logging.info('Number of variants under the default probability threshold %.2f: %d', prob_threshold, len(filtered_indices))
+    logging.info('Number of variants under the fallback probability threshold %.2f: %d', prob_threshold, len(filtered_indices))
 
     # Get the IDs of the filtered variants (for logging/debugging)
     filtered_ids = id_col.iloc[filtered_indices].values
     filtered_ids_file = os.path.join(output_dir, 'filtered_ids.txt')
     np.savetxt(filtered_ids_file, filtered_ids, fmt='%s')
-    logging.info('Saved the filtered IDs (using default threshold) to %s', filtered_ids_file)
+    logging.info('Saved filtered IDs (using fallback threshold) to %s', filtered_ids_file)
 
     # Create a VCF file with only the filtered variants
     removed_svs_vcf = os.path.join(output_dir, 'removed_svs.vcf')
@@ -391,6 +506,10 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
     with open_vcf_text(input_vcf) as vcf_in, open(output_vcf, 'w', encoding='utf-8') as vcf_out, open(removed_svs_vcf, 'w', encoding='utf-8') as removed_out:
         for line in vcf_in:
             if line.startswith('#'):
+                # Add CONFSCORE INFO header before the #CHROM line
+                if line.startswith('#CHROM'):
+                    vcf_out.write('##INFO=<ID=CONFSCORE,Number=1,Type=Float,Description="ContextScore assigned confidence score">\n')
+
                 # Write the header lines as they are
                 vcf_out.write(line)
                 removed_out.write(line)
@@ -418,7 +537,7 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
                         type_filter_stats[svtype_for_stats] = {'total': 0, 'kept': 0, 'filtered': 0}
                     type_filter_stats[svtype_for_stats]['total'] += 1
                     type_filter_stats[svtype_for_stats]['kept'] += 1
-                    vcf_out.write(line)
+                    vcf_out.write(add_confidence_to_info(line, -1.0))
                     pass_count += 1
                     total_records += 1
                     current_record += 1
@@ -431,19 +550,20 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
                     svtype = svtype_match if svtype_match else predicted_svtype
                 else:
                     # Variant not in predictions (shouldn't happen, but handle gracefully)
-                    logging.warning('Variant %d not found in predictions lookup, using default threshold', current_record)
+                    logging.warning('Variant %d not found in predictions lookup, using fallback threshold policy', current_record)
                     confidence_score = 0.0
                     svtype = svtype_match if svtype_match else 'UNKNOWN'
                 
                 # Get the appropriate threshold for this SV type
                 type_threshold = threshold_by_type.get(svtype, prob_threshold)
                 
-                # Determine if variant should be kept
-                is_large_sv = svlen_match is not None and abs(svlen_match) > large_cutoff
-                passes_threshold = confidence_score >= type_threshold
-                
-                # Keep if: (large SV) OR (passes type-specific threshold)
-                should_keep = is_large_sv or passes_threshold
+                # Relax threshold for larger SVs
+                abs_svlen = abs(svlen_match)
+                if abs_svlen is not None and abs_svlen > 10000:
+                    type_threshold = 0.1 * type_threshold
+
+                #  Keep if larger than threshold or >100kb and not deletion
+                should_keep = confidence_score >= type_threshold or (abs_svlen is not None and abs_svlen > 100000)
                 
                 # Track statistics by type
                 if svtype not in type_filter_stats:
@@ -451,12 +571,12 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
                 type_filter_stats[svtype]['total'] += 1
                 
                 if should_keep:
-                    vcf_out.write(line)
+                    vcf_out.write(add_confidence_to_info(line, confidence_score))
                     pass_count += 1
                     type_filter_stats[svtype]['kept'] += 1
                 else:
                     # Write the line to the removed_svs.vcf file if filtered
-                    removed_out.write(line)
+                    removed_out.write(add_confidence_to_info(line, confidence_score))
                     filter_count += 1
                     type_filter_stats[svtype]['filtered'] += 1
 
@@ -494,20 +614,10 @@ def main(argv=None):
                         help='Path to the model file. Optional if CONTEXTSCORE_MODEL_PATH is set or default packaged model is installed.')
     parser.add_argument('--buildver', type=str, default='hg38',
                         help='Genome build version (default: hg38).')
-    parser.add_argument('--threshold', type=float, default=0.2,
-                        help='Default threshold for filtering predictions (default: 0.2). Used for SV types without specific thresholds.')
-    parser.add_argument('--threshold-del', type=float, default=None,
-                        help='Threshold for DEL variants (default: uses --threshold value).')
-    parser.add_argument('--threshold-dup', type=float, default=None,
-                        help='Threshold for DUP variants (default: uses --threshold value).')
-    parser.add_argument('--threshold-ins', type=float, default=None,
-                        help='Threshold for INS variants (default: uses --threshold value).')
-    parser.add_argument('--threshold-inv', type=float, default=None,
-                        help='Threshold for INV variants (default: uses --threshold value).')
     parser.add_argument('--sample-coverage', type=float, required=True,
                         help='Mean read depth coverage for the sample (required, used to normalize read_depth).')
-    parser.add_argument('--large-cutoff', type=int, default=10000,
-                        help='SV size cutoff in bp; variants larger than this are always kept (default: 50000).')
+    parser.add_argument('--sample-name', type=str, default=None,
+                        help='Optional sample/dataset name used in debug probability plot title.')
     parser.add_argument('--annovar', type=str, default=None,
                         help='Path to ANNOVAR installation directory. Can also be set via ANNOVAR_PATH.')
     parser.add_argument('--annovar-db', type=str, default=None,
@@ -581,12 +691,11 @@ def main(argv=None):
 
     # Run the scoring function
     summary = score(model, input_vcf, output_vcf, buildver=buildver,
-                    threshold=args.threshold, sample_coverage=args.sample_coverage,
-                    threshold_del=args.threshold_del, threshold_dup=args.threshold_dup,
-                    threshold_ins=args.threshold_ins, threshold_inv=args.threshold_inv,
-                    large_cutoff=args.large_cutoff, annovar_path=annovar_path,
+                    sample_coverage=args.sample_coverage,
+                    annovar_path=annovar_path,
                     annovar_db_path=annovar_db_path,
-                    debug_plot=args.debug_plot)
+                    debug_plot=args.debug_plot,
+                    sample_name=args.sample_name)
 
     user_message(
         f"Completed. Kept {summary['passed_records']}/{summary['total_records']} variants; filtered {summary['filtered_records']}."
