@@ -24,7 +24,7 @@ These are the required ANNOVAR components for ContextScore:
 
 ## User Workflow
 ```bash
-contextscore --input input.vcf --output scored.vcf --sample-coverage 30 --buildver {hg38,hg19} --threshold 0.2 \
+contextscore --input input.vcf --output scored.vcf --sample-coverage 30 --buildver {hg38,hg19} \
 	--annovar /path/to/annovar --annovar-db /path/to/humandb
 ```
 

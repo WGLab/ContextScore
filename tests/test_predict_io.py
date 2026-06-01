@@ -115,9 +115,7 @@ def test_score_generates_outputs_in_tests_output(monkeypatch):
         model='tests/fixtures/dummy_model.pkl',
         input_vcf=str(FIXTURE_VCF_GZ),
         output_vcf=str(FILTERED_VCF),
-        threshold=0.2,
         sample_coverage=30,
-        large_cutoff=10000,
         annovar_path='unused',
         annovar_db_path='unused',
     )

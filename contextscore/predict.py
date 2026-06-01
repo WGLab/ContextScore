@@ -327,8 +327,7 @@ def gmm_threshold(scores, fallback=0.2, max_threshold=0.5, min_samples=20):
         logging.warning('GMM threshold fallback after error: %s. Using fallback %.4f', str(exc), fallback)
         return fallback
 
-def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
-          threshold_del=None, threshold_dup=None, threshold_ins=None, threshold_inv=None,
+def score(model, input_vcf, output_vcf, buildver='hg38',
           sample_coverage=None, annovar_path=None, annovar_db_path=None,
           debug_plot=False, sample_name=None):
     """Score the structural variants using the binary classification model.
@@ -337,18 +336,10 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
         model (str): Path to the model file.
         input_vcf (str): Path to the input VCF file.
         output_vcf (str): Path to the output VCF file.
-        threshold (float): Default threshold for SV types not specified.
-        threshold_del (float): Optional. Threshold for DEL variants. If None, uses default threshold.
-        threshold_dup (float): Optional. Threshold for DUP variants. If None, uses default threshold.
-        threshold_ins (float): Optional. Threshold for INS variants. If None, uses default threshold.
-        threshold_inv (float): Optional. Threshold for INV variants. If None, uses default threshold.
         sample_coverage (float): Required. Mean read depth coverage for the sample.
         sample_name (str): Optional. Name shown in debug probability plot title.
     """
-    # Threshold policy: per-type GMM when valid, otherwise fallback to 0.5.
-    # User-provided thresholds are intentionally ignored for this policy.
-    if threshold_del is not None or threshold_dup is not None or threshold_ins is not None or threshold_inv is not None or threshold != 0.05:
-        logging.info('User-provided threshold flags detected but ignored; using GMM thresholds with fallback/max')
+    # Threshold policy: per-type GMM when valid, otherwise fallback values.
 
     gmm_fallback_threshold = 0.2
     max_threshold = 0.3
@@ -488,15 +479,15 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
     
     logging.info('Built variant lookup with %d entries for type-specific filtering', len(variant_lookup))
     
-    # For backward compatibility, also track variants below the default threshold
+    # Track variants below the fallback threshold for logging/debugging.
     filtered_indices = np.where(y_pred[:, 1] < prob_threshold)[0]
-    logging.info('Number of variants under the default probability threshold %.2f: %d', prob_threshold, len(filtered_indices))
+    logging.info('Number of variants under the fallback probability threshold %.2f: %d', prob_threshold, len(filtered_indices))
 
     # Get the IDs of the filtered variants (for logging/debugging)
     filtered_ids = id_col.iloc[filtered_indices].values
     filtered_ids_file = os.path.join(output_dir, 'filtered_ids.txt')
     np.savetxt(filtered_ids_file, filtered_ids, fmt='%s')
-    logging.info('Saved the filtered IDs (using default threshold) to %s', filtered_ids_file)
+    logging.info('Saved filtered IDs (using fallback threshold) to %s', filtered_ids_file)
 
     # Create a VCF file with only the filtered variants
     removed_svs_vcf = os.path.join(output_dir, 'removed_svs.vcf')
@@ -559,7 +550,7 @@ def score(model, input_vcf, output_vcf, buildver='hg38', threshold=0.05,
                     svtype = svtype_match if svtype_match else predicted_svtype
                 else:
                     # Variant not in predictions (shouldn't happen, but handle gracefully)
-                    logging.warning('Variant %d not found in predictions lookup, using default threshold', current_record)
+                    logging.warning('Variant %d not found in predictions lookup, using fallback threshold policy', current_record)
                     confidence_score = 0.0
                     svtype = svtype_match if svtype_match else 'UNKNOWN'
                 
@@ -623,16 +614,6 @@ def main(argv=None):
                         help='Path to the model file. Optional if CONTEXTSCORE_MODEL_PATH is set or default packaged model is installed.')
     parser.add_argument('--buildver', type=str, default='hg38',
                         help='Genome build version (default: hg38).')
-    parser.add_argument('--threshold', type=float, default=0.2,
-                        help='Default threshold for filtering predictions (default: 0.2). Used for SV types without specific thresholds.')
-    parser.add_argument('--threshold-del', type=float, default=None,
-                        help='Threshold for DEL variants (default: uses --threshold value).')
-    parser.add_argument('--threshold-dup', type=float, default=None,
-                        help='Threshold for DUP variants (default: uses --threshold value).')
-    parser.add_argument('--threshold-ins', type=float, default=None,
-                        help='Threshold for INS variants (default: uses --threshold value).')
-    parser.add_argument('--threshold-inv', type=float, default=None,
-                        help='Threshold for INV variants (default: uses --threshold value).')
     parser.add_argument('--sample-coverage', type=float, required=True,
                         help='Mean read depth coverage for the sample (required, used to normalize read_depth).')
     parser.add_argument('--sample-name', type=str, default=None,
@@ -710,9 +691,7 @@ def main(argv=None):
 
     # Run the scoring function
     summary = score(model, input_vcf, output_vcf, buildver=buildver,
-                    threshold=args.threshold, sample_coverage=args.sample_coverage,
-                    threshold_del=args.threshold_del, threshold_dup=args.threshold_dup,
-                    threshold_ins=args.threshold_ins, threshold_inv=args.threshold_inv,
+                    sample_coverage=args.sample_coverage,
                     annovar_path=annovar_path,
                     annovar_db_path=annovar_db_path,
                     debug_plot=args.debug_plot,
